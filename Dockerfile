@@ -2,21 +2,21 @@
 # Multi-stage build for smaller production image
 
 # ===== Build Stage =====
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy dependency files
-COPY pyproject.toml uv.lock* ./
+# Copy dependency files AND README (required by pyproject.toml)
+COPY pyproject.toml uv.lock* README.md ./
 
 # Install dependencies
 RUN uv sync --frozen --no-dev --no-editable
 
 # ===== Production Stage =====
-FROM python:3.12-slim as production
+FROM python:3.12-slim AS production
 
 WORKDIR /app
 
@@ -47,4 +47,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Run the application
 CMD ["uvicorn", "diabetic_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
-

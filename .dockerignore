@@ -33,7 +33,8 @@ tests/
 
 # Development files
 test_mongo.py
-*.md
+
+# Keep README.md (required by pyproject.toml)
 
 # Git
 .git/
