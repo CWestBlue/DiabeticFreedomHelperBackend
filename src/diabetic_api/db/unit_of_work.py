@@ -49,11 +49,13 @@ class UnitOfWork:
         """
         Get Sessions repository (lazy loaded).
         
+        Uses 'ChatHistory' collection to maintain compatibility with existing N8N data.
+        
         Returns:
             SessionRepository instance
         """
         if self._sessions is None:
-            self._sessions = SessionRepository(self._db["ChatSessions"])
+            self._sessions = SessionRepository(self._db["ChatHistory"])
         return self._sessions
 
     async def run_aggregation(

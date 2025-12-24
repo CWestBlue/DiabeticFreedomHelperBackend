@@ -1,4 +1,4 @@
-"""Repository for ChatSessions collection."""
+"""Repository for ChatHistory collection (N8N compatible)."""
 
 from datetime import datetime
 from typing import Any
@@ -14,6 +14,17 @@ class SessionRepository(BaseRepository):
     Repository for chat sessions and messages.
     
     Handles CRUD operations for chat sessions and their message history.
+    Compatible with N8N's memoryMongoDbChat format.
+    
+    N8N Format:
+        - sessionId (camelCase)
+        - messages[].type: "human" | "ai"
+        - messages[].data.content: message text
+    
+    New Format:
+        - session_id (snake_case)
+        - messages[].role: "user" | "assistant"
+        - messages[].text: message text
     """
 
     def __init__(self, collection: AsyncIOMotorCollection):
@@ -43,10 +54,10 @@ class SessionRepository(BaseRepository):
             "message_count": 0,
         }
         
-        # If session_id is provided, store it as a separate field
-        # This allows client-generated UUIDs alongside MongoDB ObjectIds
+        # Store both formats for compatibility
         if session_id:
             session["session_id"] = session_id
+            session["sessionId"] = session_id  # N8N format
             await self.collection.insert_one(session)
             return session_id
         
@@ -73,15 +84,31 @@ class SessionRepository(BaseRepository):
             {"$limit": limit},
             {
                 "$project": {
-                    # Use session_id field if present, otherwise convert _id
+                    # Check all possible session ID fields
                     "session_id": {
-                        "$ifNull": ["$session_id", {"$toString": "$_id"}]
+                        "$ifNull": [
+                            "$session_id",
+                            {"$ifNull": ["$sessionId", {"$toString": "$_id"}]}
+                        ]
                     },
                     "title": 1,
                     "created_at": 1,
                     "updated_at": 1,
-                    "message_count": 1,
-                    "last_message_preview": {"$arrayElemAt": ["$messages.text", -1]},
+                    "message_count": {"$size": {"$ifNull": ["$messages", []]}},
+                    # Get last message preview (handle both formats)
+                    "last_message_preview": {
+                        "$let": {
+                            "vars": {
+                                "lastMsg": {"$arrayElemAt": ["$messages", -1]}
+                            },
+                            "in": {
+                                "$ifNull": [
+                                    "$$lastMsg.text",  # New format
+                                    "$$lastMsg.data.content"  # N8N format
+                                ]
+                            }
+                        }
+                    },
                 }
             },
         ]
@@ -104,13 +131,16 @@ class SessionRepository(BaseRepository):
         if doc:
             # Normalize to always have session_id field
             if "session_id" not in doc:
-                doc["session_id"] = str(doc.get("_id", ""))
+                doc["session_id"] = doc.get("sessionId", str(doc.get("_id", "")))
             doc.pop("_id", None)
+            
+            # Normalize messages to our format
+            doc["messages"] = self._normalize_messages(doc.get("messages", []))
         return doc
 
     async def _find_session(self, session_id: str) -> dict[str, Any] | None:
         """
-        Find a session by ID, checking both _id and session_id fields.
+        Find a session by ID, checking multiple ID fields.
         
         Args:
             session_id: Session ID (ObjectId or client UUID)
@@ -118,8 +148,13 @@ class SessionRepository(BaseRepository):
         Returns:
             Session document or None
         """
-        # First try to find by session_id field (client-generated UUID)
+        # Try session_id field first (new format)
         doc = await self.collection.find_one({"session_id": session_id})
+        if doc:
+            return doc
+        
+        # Try sessionId field (N8N format)
+        doc = await self.collection.find_one({"sessionId": session_id})
         if doc:
             return doc
         
@@ -129,6 +164,34 @@ class SessionRepository(BaseRepository):
             return doc
         except Exception:
             return None
+
+    def _normalize_messages(self, messages: list[dict]) -> list[dict]:
+        """
+        Normalize messages from N8N format to our format.
+        
+        N8N: {"type": "human", "data": {"content": "..."}}
+        Ours: {"role": "user", "text": "..."}
+        """
+        normalized = []
+        for msg in messages:
+            # Already in our format
+            if "role" in msg and "text" in msg:
+                normalized.append(msg)
+                continue
+            
+            # N8N format
+            msg_type = msg.get("type", "")
+            content = msg.get("data", {}).get("content", "")
+            
+            if msg_type and content:
+                role = "user" if msg_type == "human" else "assistant"
+                normalized.append({
+                    "role": role,
+                    "text": content,
+                    "timestamp": msg.get("timestamp", datetime.utcnow()),
+                })
+        
+        return normalized
 
     async def get_messages(
         self,
@@ -143,25 +206,13 @@ class SessionRepository(BaseRepository):
             limit: Maximum messages to return
             
         Returns:
-            List of messages (most recent last)
+            List of messages (most recent last), normalized to our format
         """
-        # First try to find by session_id field (client UUID)
-        doc = await self.collection.find_one(
-            {"session_id": session_id},
-            {"messages": {"$slice": -limit}},
-        )
+        doc = await self._find_session(session_id)
         if doc:
-            return doc.get("messages", [])
-        
-        # Fall back to _id (ObjectId)
-        try:
-            doc = await self.collection.find_one(
-                {"_id": ObjectId(session_id)},
-                {"messages": {"$slice": -limit}},
-            )
-            return doc.get("messages", []) if doc else []
-        except Exception:
-            return []
+            messages = doc.get("messages", [])[-limit:]
+            return self._normalize_messages(messages)
+        return []
 
     async def add_message(
         self,
@@ -172,6 +223,8 @@ class SessionRepository(BaseRepository):
         """
         Add a message to a session.
         
+        Stores in both formats for compatibility.
+        
         Args:
             session_id: Session ID (ObjectId or client UUID)
             text: Message content
@@ -181,7 +234,14 @@ class SessionRepository(BaseRepository):
             True if message was added
         """
         now = datetime.utcnow()
+        
+        # Create message in N8N-compatible format
+        msg_type = "human" if role == "user" else "ai"
         message = {
+            # N8N format
+            "type": msg_type,
+            "data": {"content": text},
+            # Our format (for easier reading)
             "text": text,
             "role": role,
             "timestamp": now,
@@ -194,9 +254,17 @@ class SessionRepository(BaseRepository):
             "$set": {"updated_at": now},
         }
         
-        # Try session_id field first (client UUID)
+        # Try session_id field first (new format)
         result = await self.collection.update_one(
             {"session_id": session_id},
+            update,
+        )
+        if result.modified_count > 0:
+            return True
+        
+        # Try sessionId field (N8N format)
+        result = await self.collection.update_one(
+            {"sessionId": session_id},
             update,
         )
         if result.modified_count > 0:
@@ -223,9 +291,17 @@ class SessionRepository(BaseRepository):
         Returns:
             True if title was updated
         """
-        # Try session_id field first (client UUID)
+        # Try session_id field first (new format)
         result = await self.collection.update_one(
             {"session_id": session_id},
+            {"$set": {"title": title}},
+        )
+        if result.modified_count > 0:
+            return True
+        
+        # Try sessionId field (N8N format)
+        result = await self.collection.update_one(
+            {"sessionId": session_id},
             {"$set": {"title": title}},
         )
         if result.modified_count > 0:
@@ -248,7 +324,7 @@ class SessionRepository(BaseRepository):
         if not doc:
             return False
         
-        messages = doc.get("messages", [])
+        messages = self._normalize_messages(doc.get("messages", []))
         if not messages:
             return False
         
@@ -262,8 +338,9 @@ class SessionRepository(BaseRepository):
             return False
         
         # Truncate to 50 chars for title
-        title = first_user_msg.get("text", "")[:50]
-        if len(first_user_msg.get("text", "")) > 50:
+        text = first_user_msg.get("text", "")
+        title = text[:50]
+        if len(text) > 50:
             title += "..."
         
         return await self.update_title(session_id, title)
@@ -278,11 +355,15 @@ class SessionRepository(BaseRepository):
         Returns:
             True if session was deleted
         """
-        # Try session_id field first (client UUID)
+        # Try session_id field first (new format)
         result = await self.collection.delete_one({"session_id": session_id})
+        if result.deleted_count > 0:
+            return True
+        
+        # Try sessionId field (N8N format)
+        result = await self.collection.delete_one({"sessionId": session_id})
         if result.deleted_count > 0:
             return True
         
         # Fall back to _id (ObjectId)
         return await self.delete_one(session_id)
-
