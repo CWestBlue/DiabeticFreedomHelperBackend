@@ -1,0 +1,46 @@
+# Docker Compose for Production (TrueNAS)
+# Pulls pre-built image from GitHub Container Registry
+#
+# Usage:
+#   1. Create .env file with your secrets
+#   2. docker compose -f docker-compose.prod.yml up -d
+#   3. To update: docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d
+
+services:
+  api:
+    # UPDATE THIS after creating your GitHub repo:
+    # image: ghcr.io/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME:latest
+    image: ghcr.io/connerwest/diabetic-api:latest
+    container_name: diabetic-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      # MongoDB Atlas
+      - MONGO_URI=${MONGO_URI}
+      - DB_NAME=${DB_NAME:-Diabetes}
+      # LLM Provider
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      # App
+      - DEBUG=${DEBUG:-false}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+    labels:
+      # Watchtower auto-update (optional)
+      - "com.centurylinklabs.watchtower.enable=true"
+

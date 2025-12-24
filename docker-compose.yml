@@ -1,0 +1,66 @@
+# Docker Compose for Diabetic AI API
+# Usage: docker-compose up --build
+#
+# For TrueNAS/production with external MongoDB:
+#   docker-compose -f docker-compose.yml -f docker-compose.truenas.yml up --build
+
+services:
+  api:
+    build: .
+    container_name: diabetic-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      # MongoDB
+      - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017}
+      - DB_NAME=${DB_NAME:-diabetic_db}
+      # LLM Provider (openai or gemini)
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      # OpenAI Config
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # Google Gemini Config
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      # LLM Settings
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      # App
+      - DEBUG=${DEBUG:-false}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - diabetic-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  mongo:
+    image: mongo:7
+    container_name: diabetic-mongo
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - diabetic-network
+
+volumes:
+  mongo_data:
+    driver: local
+
+networks:
+  diabetic-network:
+    driver: bridge
+

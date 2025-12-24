@@ -1,0 +1,57 @@
+# Docker Compose for development (with hot reload)
+# Usage: docker-compose -f docker-compose.dev.yml up
+
+services:
+  api:
+    build:
+      context: .
+      target: builder
+    container_name: diabetic-api-dev
+    ports:
+      - "8000:8000"
+    environment:
+      # MongoDB
+      - MONGO_URI=mongodb://mongo:27017
+      - DB_NAME=diabetic_db
+      # LLM Provider
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      # App
+      - DEBUG=true
+    volumes:
+      - ./src:/app/src:ro
+    command: uv run uvicorn diabetic_api.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - diabetic-network
+
+  mongo:
+    image: mongo:7
+    container_name: diabetic-mongo-dev
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data_dev:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - diabetic-network
+
+volumes:
+  mongo_data_dev:
+    driver: local
+
+networks:
+  diabetic-network:
+    driver: bridge
+

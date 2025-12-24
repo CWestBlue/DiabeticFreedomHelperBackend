@@ -1,0 +1,41 @@
+# Docker Compose override for TrueNAS deployment
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.truenas.yml up -d
+#
+# This override:
+#   - Removes the bundled MongoDB (use external)
+#   - Adds container labels for Traefik/reverse proxy
+#   - Sets production-ready restart policies
+
+services:
+  api:
+    # Override to remove mongo dependency (use external MongoDB)
+    depends_on: []
+    
+    # Production labels (uncomment for Traefik)
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.http.routers.diabetic-api.rule=Host(`diabetic.local`)"
+    #   - "traefik.http.services.diabetic-api.loadbalancer.server.port=8000"
+    
+    restart: always
+    
+    # Resource limits (adjust for your TrueNAS specs)
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # Disable bundled MongoDB - use external
+  mongo:
+    profiles:
+      - disabled
+
+networks:
+  diabetic-network:
+    driver: bridge
+    # Uncomment to use existing network on TrueNAS
+    # external: true
+    # name: truenas-apps
+
