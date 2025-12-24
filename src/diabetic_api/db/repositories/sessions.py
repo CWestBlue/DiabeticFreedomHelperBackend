@@ -19,12 +19,17 @@ class SessionRepository(BaseRepository):
     def __init__(self, collection: AsyncIOMotorCollection):
         super().__init__(collection)
 
-    async def create(self, title: str | None = None) -> str:
+    async def create(
+        self,
+        title: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         """
         Create a new chat session.
         
         Args:
             title: Optional session title (auto-generated if not provided)
+            session_id: Optional session ID (for client-generated IDs like UUIDs)
             
         Returns:
             Created session ID
@@ -37,6 +42,14 @@ class SessionRepository(BaseRepository):
             "updated_at": now,
             "message_count": 0,
         }
+        
+        # If session_id is provided, store it as a separate field
+        # This allows client-generated UUIDs alongside MongoDB ObjectIds
+        if session_id:
+            session["session_id"] = session_id
+            await self.collection.insert_one(session)
+            return session_id
+        
         return await self.insert_one(session)
 
     async def get_all_sessions(
@@ -60,7 +73,10 @@ class SessionRepository(BaseRepository):
             {"$limit": limit},
             {
                 "$project": {
-                    "session_id": {"$toString": "$_id"},
+                    # Use session_id field if present, otherwise convert _id
+                    "session_id": {
+                        "$ifNull": ["$session_id", {"$toString": "$_id"}]
+                    },
                     "title": 1,
                     "created_at": 1,
                     "updated_at": 1,
@@ -79,15 +95,37 @@ class SessionRepository(BaseRepository):
         Get a session with all its messages.
         
         Args:
-            session_id: Session ID
+            session_id: Session ID (ObjectId or client UUID)
             
         Returns:
             Session document with messages, or None if not found
         """
+        doc = await self._find_session(session_id)
+        if doc:
+            # Normalize to always have session_id field
+            if "session_id" not in doc:
+                doc["session_id"] = str(doc.get("_id", ""))
+            doc.pop("_id", None)
+        return doc
+
+    async def _find_session(self, session_id: str) -> dict[str, Any] | None:
+        """
+        Find a session by ID, checking both _id and session_id fields.
+        
+        Args:
+            session_id: Session ID (ObjectId or client UUID)
+            
+        Returns:
+            Session document or None
+        """
+        # First try to find by session_id field (client-generated UUID)
+        doc = await self.collection.find_one({"session_id": session_id})
+        if doc:
+            return doc
+        
+        # Fall back to _id (ObjectId)
         try:
             doc = await self.collection.find_one({"_id": ObjectId(session_id)})
-            if doc:
-                doc["session_id"] = str(doc.pop("_id"))
             return doc
         except Exception:
             return None
@@ -101,12 +139,21 @@ class SessionRepository(BaseRepository):
         Get messages for a session.
         
         Args:
-            session_id: Session ID
+            session_id: Session ID (ObjectId or client UUID)
             limit: Maximum messages to return
             
         Returns:
             List of messages (most recent last)
         """
+        # First try to find by session_id field (client UUID)
+        doc = await self.collection.find_one(
+            {"session_id": session_id},
+            {"messages": {"$slice": -limit}},
+        )
+        if doc:
+            return doc.get("messages", [])
+        
+        # Fall back to _id (ObjectId)
         try:
             doc = await self.collection.find_one(
                 {"_id": ObjectId(session_id)},
@@ -126,7 +173,7 @@ class SessionRepository(BaseRepository):
         Add a message to a session.
         
         Args:
-            session_id: Session ID
+            session_id: Session ID (ObjectId or client UUID)
             text: Message content
             role: 'user' or 'assistant'
             
@@ -141,14 +188,25 @@ class SessionRepository(BaseRepository):
             "message_id": str(ObjectId()),
         }
         
+        update = {
+            "$push": {"messages": message},
+            "$inc": {"message_count": 1},
+            "$set": {"updated_at": now},
+        }
+        
+        # Try session_id field first (client UUID)
+        result = await self.collection.update_one(
+            {"session_id": session_id},
+            update,
+        )
+        if result.modified_count > 0:
+            return True
+        
+        # Fall back to _id (ObjectId)
         try:
             result = await self.collection.update_one(
                 {"_id": ObjectId(session_id)},
-                {
-                    "$push": {"messages": message},
-                    "$inc": {"message_count": 1},
-                    "$set": {"updated_at": now},
-                },
+                update,
             )
             return result.modified_count > 0
         except Exception:
@@ -159,12 +217,21 @@ class SessionRepository(BaseRepository):
         Update session title.
         
         Args:
-            session_id: Session ID
+            session_id: Session ID (ObjectId or client UUID)
             title: New title
             
         Returns:
             True if title was updated
         """
+        # Try session_id field first (client UUID)
+        result = await self.collection.update_one(
+            {"session_id": session_id},
+            {"$set": {"title": title}},
+        )
+        if result.modified_count > 0:
+            return True
+        
+        # Fall back to _id (ObjectId)
         return await self.update_one(session_id, {"title": title})
 
     async def update_title_from_first_message(self, session_id: str) -> bool:
@@ -172,12 +239,12 @@ class SessionRepository(BaseRepository):
         Auto-generate title from first user message.
         
         Args:
-            session_id: Session ID
+            session_id: Session ID (ObjectId or client UUID)
             
         Returns:
             True if title was updated
         """
-        doc = await self.find_by_id(session_id)
+        doc = await self._find_session(session_id)
         if not doc:
             return False
         
@@ -206,10 +273,16 @@ class SessionRepository(BaseRepository):
         Delete a chat session.
         
         Args:
-            session_id: Session ID
+            session_id: Session ID (ObjectId or client UUID)
             
         Returns:
             True if session was deleted
         """
+        # Try session_id field first (client UUID)
+        result = await self.collection.delete_one({"session_id": session_id})
+        if result.deleted_count > 0:
+            return True
+        
+        # Fall back to _id (ObjectId)
         return await self.delete_one(session_id)
 

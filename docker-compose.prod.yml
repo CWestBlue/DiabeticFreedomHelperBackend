@@ -8,9 +8,7 @@
 
 services:
   api:
-    # UPDATE THIS after creating your GitHub repo:
-    # image: ghcr.io/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME:latest
-    image: ghcr.io/connerwest/diabetic-api:latest
+    image: ghcr.io/cwestblue/diabetic-api:latest
     container_name: diabetic-api
     restart: unless-stopped
     ports:

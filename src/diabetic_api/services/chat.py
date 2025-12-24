@@ -125,19 +125,24 @@ class ChatService:
             chunks.append(chunk)
         return "".join(chunks)
 
-    async def create_session(self, title: str | None = None) -> str:
+    async def create_session(
+        self,
+        title: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
         """
         Create a new chat session.
         
         Args:
             title: Optional session title
+            session_id: Optional session ID (for client-generated IDs)
             
         Returns:
-            New session ID
+            Session ID
         """
-        session_id = await self.uow.sessions.create(title)
-        logger.info(f"Created session: {session_id}")
-        return session_id
+        created_id = await self.uow.sessions.create(title, session_id=session_id)
+        logger.info(f"Created session: {created_id}")
+        return created_id
 
     async def get_session(self, session_id: str) -> dict | None:
         """

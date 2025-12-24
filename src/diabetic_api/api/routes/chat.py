@@ -31,11 +31,13 @@ async def chat(
     if request.session_id is None:
         session_id = await service.create_session()
     else:
-        # Verify session exists
+        # Check if session exists, create if it doesn't
         session = await service.get_session(request.session_id)
         if session is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-        session_id = request.session_id
+            # Auto-create session with the provided ID
+            session_id = await service.create_session(session_id=request.session_id)
+        else:
+            session_id = request.session_id
 
     async def generate():
         """Generate SSE events from chat response."""
@@ -90,10 +92,13 @@ async def chat_sync(
     if request.session_id is None:
         session_id = await service.create_session()
     else:
+        # Check if session exists, create if it doesn't
         session = await service.get_session(request.session_id)
         if session is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-        session_id = request.session_id
+            # Auto-create session with the provided ID
+            session_id = await service.create_session(session_id=request.session_id)
+        else:
+            session_id = request.session_id
 
     # Collect full response
     full_response = ""
