@@ -651,14 +651,20 @@ class CareLinkSyncService:
         Returns:
             True if date range set successfully
         """
-        logger.info(f"Setting date range: {start_date.date()} to {end_date.date()}")
+        from selenium.webdriver.common.keys import Keys
+        
+        # Format dates as MM/DD/YYYY (common US format for CareLink)
+        start_str = start_date.strftime("%m/%d/%Y")
+        end_str = end_date.strftime("%m/%d/%Y")
+        logger.info(f"Setting date range: {start_str} to {end_str}")
         
         try:
-            # Look for date range picker
+            # Look for date range picker trigger
             date_picker_selectors = [
                 "//div[contains(@class, 'date-range')]",
                 "//button[contains(@class, 'date')]",
-                "//input[contains(@type, 'date')]",
+                "//mat-date-range-input",
+                "//*[contains(@class, 'datepicker')]",
                 "//*[contains(text(), 'Date Range')]",
             ]
             
@@ -671,6 +677,7 @@ class CareLinkSyncService:
                         timeout=5,
                         clickable=True,
                     )
+                    logger.info(f"Found date picker with selector: {selector}")
                     break
                 except TimeoutException:
                     continue
@@ -682,15 +689,67 @@ class CareLinkSyncService:
             date_picker.click()
             time.sleep(1)
             
-            # TODO: Implement proper date selection based on CareLink UI
-            # For now, just click Apply to close the datepicker
+            # Try to find start date input field
+            start_input_selectors = [
+                "//input[contains(@placeholder, 'Start') or contains(@aria-label, 'Start')]",
+                "//input[@formcontrolname='start']",
+                "//input[contains(@class, 'start')]",
+                "(//input[contains(@class, 'mat-date')])[1]",
+                "//mat-date-range-input//input[1]",
+            ]
             
-            # Try to find and click Apply button
+            start_input = None
+            for selector in start_input_selectors:
+                try:
+                    start_input = self._driver.find_element(By.XPATH, selector)
+                    if start_input.is_displayed():
+                        logger.info(f"Found start input with: {selector}")
+                        break
+                except Exception:
+                    continue
+            
+            if start_input:
+                # Clear and enter start date
+                start_input.click()
+                start_input.send_keys(Keys.CONTROL + "a")
+                start_input.send_keys(start_str)
+                logger.info(f"Entered start date: {start_str}")
+                time.sleep(0.5)
+            
+            # Try to find end date input field
+            end_input_selectors = [
+                "//input[contains(@placeholder, 'End') or contains(@aria-label, 'End')]",
+                "//input[@formcontrolname='end']",
+                "//input[contains(@class, 'end')]",
+                "(//input[contains(@class, 'mat-date')])[2]",
+                "//mat-date-range-input//input[2]",
+            ]
+            
+            end_input = None
+            for selector in end_input_selectors:
+                try:
+                    end_input = self._driver.find_element(By.XPATH, selector)
+                    if end_input.is_displayed():
+                        logger.info(f"Found end input with: {selector}")
+                        break
+                except Exception:
+                    continue
+            
+            if end_input:
+                # Clear and enter end date
+                end_input.click()
+                end_input.send_keys(Keys.CONTROL + "a")
+                end_input.send_keys(end_str)
+                logger.info(f"Entered end date: {end_str}")
+                time.sleep(0.5)
+            
+            # Click Apply button to confirm the date range
             apply_selectors = [
                 "//button[contains(text(), 'Apply')]",
                 "//button[contains(text(), 'APPLY')]",
                 "//button[contains(@class, 'apply')]",
                 "//span[contains(text(), 'Apply')]/parent::button",
+                "//button[contains(@class, 'mat-primary')]",
             ]
             
             apply_btn = None
@@ -711,18 +770,34 @@ class CareLinkSyncService:
                 logger.info("Clicked Apply button on date picker")
                 time.sleep(1)
             else:
-                # No Apply button found, try pressing Escape to close
-                from selenium.webdriver.common.keys import Keys
+                # No Apply button found, try pressing Escape or Enter
                 body = self._driver.find_element(By.TAG_NAME, "body")
                 body.send_keys(Keys.ESCAPE)
                 logger.info("No Apply button found, sent Escape to close datepicker")
                 time.sleep(0.5)
             
-            logger.info("Date range selection attempted")
+            # Wait for datepicker overlay to close
+            try:
+                WebDriverWait(self._driver, 3).until(
+                    EC.invisibility_of_element_located(
+                        (By.CSS_SELECTOR, "div.cdk-overlay-backdrop")
+                    )
+                )
+                logger.info("Datepicker overlay closed")
+            except TimeoutException:
+                logger.warning("Datepicker overlay may still be open")
+            
+            logger.info("Date range selection completed")
             return True
             
         except Exception as e:
             logger.warning(f"Error setting date range: {e}, continuing with default")
+            # Try to close any open overlay
+            try:
+                body = self._driver.find_element(By.TAG_NAME, "body")
+                body.send_keys(Keys.ESCAPE)
+            except Exception:
+                pass
             return True  # Continue with default range
     
     def _trigger_export(self) -> str | None:
