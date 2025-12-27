@@ -147,8 +147,16 @@ class CareLinkSyncService:
         if chrome_bin and os.path.exists(chrome_bin):
             options.binary_location = chrome_bin
         
-        # Headless mode
-        options.add_argument("--headless=new")
+        # Headless mode - can be disabled for debugging
+        # Set CARELINK_HEADLESS=false to run with visible browser for debugging
+        headless = os.environ.get("CARELINK_HEADLESS", "true").lower() != "false"
+        
+        if headless:
+            options.add_argument("--headless=new")
+            logger.info("Running in headless mode")
+        else:
+            logger.info("Running in VISIBLE mode (for debugging)")
+        
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
@@ -312,23 +320,51 @@ class CareLinkSyncService:
             WebDriverWait(self._driver, timeout).until(
                 lambda d: d.execute_script("return document.readyState") == "complete"
             )
+            logger.info("Document ready state: complete")
+            
+            # Check if JavaScript is working
+            js_test = self._driver.execute_script("return typeof window !== 'undefined'")
+            logger.info(f"JavaScript working: {js_test}")
+            
+            # Check for Angular
+            angular_check = self._driver.execute_script(
+                """
+                var hasTestabilities = typeof window.getAllAngularTestabilities === 'function';
+                return {
+                    hasAngular: typeof window.ng !== 'undefined',
+                    hasAngularTestabilities: hasTestabilities,
+                    bodyChildren: document.body ? document.body.children.length : 0,
+                    inputCount: document.querySelectorAll('input').length
+                };
+                """
+            )
+            logger.info(f"Angular check: {angular_check}")
             
             # Wait for Angular to stabilize (if Angular app)
-            try:
-                self._driver.execute_script(
-                    """
-                    if (window.getAllAngularTestabilities) {
-                        return window.getAllAngularTestabilities().every(t => t.isStable());
-                    }
-                    return true;
-                    """
-                )
-            except Exception:
-                pass  # Not an Angular app or script failed
+            if angular_check.get("hasAngularTestabilities"):
+                try:
+                    WebDriverWait(self._driver, 10).until(
+                        lambda d: d.execute_script(
+                            "return window.getAllAngularTestabilities().every(t => t.isStable());"
+                        )
+                    )
+                    logger.info("Angular stabilized")
+                except Exception as e:
+                    logger.warning(f"Angular stabilization timeout: {e}")
             
-            # Give extra time for dynamic content
-            time.sleep(3)
-            return True
+            # Wait for inputs to appear (poll every second)
+            logger.info("Polling for input elements...")
+            for i in range(timeout):
+                input_count = self._driver.execute_script(
+                    "return document.querySelectorAll('input').length;"
+                )
+                if input_count > 0:
+                    logger.info(f"Found {input_count} inputs after {i+1} seconds")
+                    return True
+                time.sleep(1)
+            
+            logger.warning(f"No inputs found after {timeout} seconds")
+            return False
             
         except Exception as e:
             logger.warning(f"Error waiting for SPA: {e}")
