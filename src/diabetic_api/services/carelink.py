@@ -709,11 +709,15 @@ class CareLinkSyncService:
                     continue
             
             if start_input:
-                # Clear and enter start date
-                start_input.click()
-                start_input.send_keys(Keys.CONTROL + "a")
-                start_input.send_keys(start_str)
-                logger.info(f"Entered start date: {start_str}")
+                # Use JavaScript to set value (Angular Material inputs aren't directly interactable)
+                self._driver.execute_script(
+                    "arguments[0].value = arguments[1]; "
+                    "arguments[0].dispatchEvent(new Event('input', { bubbles: true })); "
+                    "arguments[0].dispatchEvent(new Event('change', { bubbles: true }));",
+                    start_input,
+                    start_str,
+                )
+                logger.info(f"Set start date via JS: {start_str}")
                 time.sleep(0.5)
             
             # Try to find end date input field
@@ -736,11 +740,15 @@ class CareLinkSyncService:
                     continue
             
             if end_input:
-                # Clear and enter end date
-                end_input.click()
-                end_input.send_keys(Keys.CONTROL + "a")
-                end_input.send_keys(end_str)
-                logger.info(f"Entered end date: {end_str}")
+                # Use JavaScript to set value (Angular Material inputs aren't directly interactable)
+                self._driver.execute_script(
+                    "arguments[0].value = arguments[1]; "
+                    "arguments[0].dispatchEvent(new Event('input', { bubbles: true })); "
+                    "arguments[0].dispatchEvent(new Event('change', { bubbles: true }));",
+                    end_input,
+                    end_str,
+                )
+                logger.info(f"Set end date via JS: {end_str}")
                 time.sleep(0.5)
             
             # Click Apply button to confirm the date range
