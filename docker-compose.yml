@@ -24,6 +24,11 @@ services:
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       # LLM Settings
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      # LangSmith Tracing (optional - get API key from https://smith.langchain.com/)
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-false}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY:-}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-DiabeticAIChat}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
       # App
       - DEBUG=${DEBUG:-false}
     depends_on:

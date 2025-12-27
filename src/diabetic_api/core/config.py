@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     monthly_token_limit: int = 10000000  # Max tokens per month (0 = unlimited)
     usage_tracking_enabled: bool = True  # Track usage even if limits are disabled
 
+    # LangSmith Tracing (https://smith.langchain.com/)
+    langchain_tracing_v2: bool = False  # Enable LangSmith tracing
+    langchain_api_key: str = ""  # LangSmith API key
+    langchain_project: str = "DiabeticAIChat"  # Project name in LangSmith
+    langchain_endpoint: str = "https://api.smith.langchain.com"  # LangSmith API endpoint
+
     # App
     debug: bool = False
     app_name: str = "Diabetic AI API"
