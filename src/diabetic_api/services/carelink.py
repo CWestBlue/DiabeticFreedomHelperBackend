@@ -410,27 +410,52 @@ class CareLinkSyncService:
         Returns:
             True if login successful, False otherwise
         """
-        # Go directly to login page (skip landing page)
+        # Go to CareLink - may land on home page first
         login_url = f"{self.BASE_URL}/app/login"
-        logger.info(f"Navigating to CareLink login: {login_url}")
+        logger.info(f"Navigating to CareLink: {login_url}")
         self._driver.get(login_url)
         
-        # Wait for SPA to render
-        self._wait_for_angular_load(timeout=30)
+        # Wait for page to load
+        time.sleep(5)
         
         logger.info(f"Current URL: {self._driver.current_url}")
         logger.info(f"Page title: {self._driver.title}")
-        self._save_debug_screenshot("01_login_page")
+        self._save_debug_screenshot("01_landing_page")
         
         try:
+            # Step 0: Click "Sign in" button on landing page
+            logger.info("Looking for 'Sign in' button on landing page...")
+            sign_in_selectors = [
+                "//button[text()='Sign in']",
+                "//a[text()='Sign in']",
+                "//button[contains(text(), 'Sign in')]",
+                "//a[contains(text(), 'Sign in')]",
+                "//button[contains(@class, 'sign')]",
+                "//a[contains(@href, 'login')]",
+            ]
+            
+            sign_in_btn = self._find_element_multi(
+                sign_in_selectors,
+                by_type="xpath",
+                timeout=10,
+            )
+            
+            if sign_in_btn:
+                logger.info("Found 'Sign in' button, clicking...")
+                sign_in_btn.click()
+                time.sleep(5)  # Wait for login form to load
+                logger.info(f"After Sign in click - URL: {self._driver.current_url}")
+                self._save_debug_screenshot("02_after_signin_click")
+            else:
+                logger.warning("No 'Sign in' button found, checking if already on login form")
+            
+            # Wait for SPA to render the login form
+            self._wait_for_angular_load(timeout=30)
+            
             # Check if login is in an iframe
             in_iframe = self._check_for_iframes()
             if in_iframe:
                 logger.info("Login form found in iframe")
-            
-            # Wait additional time for dynamic form rendering
-            logger.info("Waiting for login form to render...")
-            time.sleep(5)
             
             # Log all input elements found
             all_inputs = self._driver.find_elements(By.TAG_NAME, "input")
