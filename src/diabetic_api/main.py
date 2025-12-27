@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from diabetic_api.api.routes import chat, dashboard, sessions, upload
+from diabetic_api.api.routes import chat, dashboard, sessions, upload, usage
 from diabetic_api.core.config import get_settings
 from diabetic_api.core.exceptions import APIError
 from diabetic_api.db.mongo import MongoDB
@@ -104,6 +104,7 @@ def create_app() -> FastAPI:
     app.include_router(sessions.router, prefix="/sessions", tags=["Sessions"])
     app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
     app.include_router(upload.router, prefix="/upload", tags=["Upload"])
+    app.include_router(usage.router, prefix="/usage", tags=["Usage"])
     
     return app
 

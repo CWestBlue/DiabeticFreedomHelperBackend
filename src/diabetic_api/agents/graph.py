@@ -14,6 +14,7 @@ from diabetic_api.agents.nodes.full_data import FullDataNode
 from diabetic_api.agents.llm import get_llm, get_llm_info
 from diabetic_api.core.config import get_settings
 from diabetic_api.db.unit_of_work import UnitOfWork
+from diabetic_api.services.usage import UsageService, UsageLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +243,7 @@ class StreamingChatGraph:
     Wrapper for chat graph with streaming support.
     
     Provides async iteration over response chunks for SSE streaming.
+    Includes usage tracking and cost protection features.
     """
     
     def __init__(self, llm: BaseChatModel | None = None):
@@ -259,6 +261,7 @@ class StreamingChatGraph:
         self.llm = llm
         self.graph = build_graph(llm) if llm else None
         self.streaming_research = StreamingResearchAgent(llm) if llm else None
+        self._usage_service: UsageService | None = None
     
     async def astream(
         self,
@@ -272,6 +275,11 @@ class StreamingChatGraph:
         
         Runs the full graph (router → query_gen → research) and streams
         the final research response.
+        
+        Includes usage tracking and cost protection:
+        - Tracks all LLM calls in MongoDB
+        - Enforces daily/monthly limits configured in settings
+        - Returns user-friendly error when limits are exceeded
         
         Args:
             message: User's message
@@ -291,12 +299,28 @@ class StreamingChatGraph:
                 yield chunk.get("content", "")
             return
         
-        # Create initial state
+        # Initialize usage service (lazy - uses same DB as uow)
+        if self._usage_service is None:
+            self._usage_service = UsageService(uow._db)
+        
+        # Check usage limits before starting (fail fast)
+        try:
+            await self._usage_service.check_limit()
+        except UsageLimitExceeded as e:
+            logger.warning(f"Usage limit exceeded before chat: {e}")
+            yield f"⚠️ **API Usage Limit Reached**\n\n"
+            yield f"{e.limit_type.capitalize()} limit of **{e.limit:,}** {e.metric} has been reached "
+            yield f"({e.current:,} {e.metric} used).\n\n"
+            yield "Please try again later or contact the administrator to increase limits."
+            return
+        
+        # Create initial state with usage service
         state = create_initial_state(
             message=message,
             history=history,
             uow=uow,
             session_id=session_id,
+            usage_service=self._usage_service,
         )
         
         logger.info(f"Starting chat stream for: {message[:50]}...")
@@ -341,6 +365,12 @@ class StreamingChatGraph:
                                     buffer = ""
                         return
             
+        except UsageLimitExceeded as e:
+            logger.warning(f"Usage limit exceeded during graph execution: {e}")
+            yield f"\n\n⚠️ **API Usage Limit Reached**\n\n"
+            yield f"{e.limit_type.capitalize()} limit of **{e.limit:,}** {e.metric} has been reached.\n\n"
+            yield "Please try again later or contact the administrator."
+
         except Exception as e:
             import traceback
             logger.error(f"Graph execution error: {e}")

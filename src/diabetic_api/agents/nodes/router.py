@@ -8,8 +8,12 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from diabetic_api.agents.state import ChatState, RouteDecision
 from diabetic_api.agents.prompts.router import ROUTER_SYSTEM_PROMPT
+from diabetic_api.services.usage import UsageLimitExceeded, extract_token_usage
 
 logger = logging.getLogger(__name__)
+
+# Agent name for usage tracking
+AGENT_NAME = "router"
 
 
 class RouterAgent:
@@ -60,8 +64,24 @@ Current User Message: {state['message']}"""
         ]
 
         try:
+            # Check usage limits before making LLM call
+            usage_service = state.get("usage_service")
+            if usage_service:
+                await usage_service.check_limit()
+
             # Get routing decision from LLM
             response = await self.llm.ainvoke(messages)
+
+            # Record usage after successful call (including tokens)
+            if usage_service:
+                model_name = getattr(self.llm, "model", "unknown")
+                input_tokens, output_tokens = extract_token_usage(response)
+                await usage_service.record_call(
+                    model=str(model_name),
+                    agent=AGENT_NAME,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
             response_text = response.content.strip()
             
             # Clean up response if wrapped in markdown

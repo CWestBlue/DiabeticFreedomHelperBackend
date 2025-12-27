@@ -10,8 +10,12 @@ from diabetic_api.agents.prompts.research import (
     RESEARCH_SYSTEM_PROMPT,
     format_research_prompt,
 )
+from diabetic_api.services.usage import UsageLimitExceeded, extract_token_usage
 
 logger = logging.getLogger(__name__)
+
+# Agent name for usage tracking
+AGENT_NAME = "research"
 
 
 class ResearchAgent:
@@ -83,8 +87,25 @@ class ResearchAgent:
         ]
 
         try:
+            # Check usage limits before making LLM call
+            usage_service = state.get("usage_service")
+            if usage_service:
+                await usage_service.check_limit()
+
             # Generate response
             response = await self.llm.ainvoke(messages)
+
+            # Record usage after successful call (including tokens)
+            if usage_service:
+                model_name = getattr(self.llm, "model", "unknown")
+                input_tokens, output_tokens = extract_token_usage(response)
+                await usage_service.record_call(
+                    model=str(model_name),
+                    agent=AGENT_NAME,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
+
             response_text = response.content
 
             logger.info(f"Generated response: {len(response_text)} chars")
@@ -166,10 +187,38 @@ class StreamingResearchAgent(ResearchAgent):
         ]
 
         try:
-            # Stream response
+            # Check usage limits before making LLM call
+            usage_service = state.get("usage_service")
+            if usage_service:
+                await usage_service.check_limit()
+
+            # Stream response - track output for token estimation
+            output_chars = 0
             async for chunk in self.llm.astream(messages):
                 if hasattr(chunk, 'content') and chunk.content:
+                    output_chars += len(chunk.content)
                     yield chunk.content
+
+            # Record usage after streaming completes
+            # For streaming, we estimate tokens (~4 chars per token)
+            # Input tokens are harder to estimate - use prompt length
+            if usage_service:
+                model_name = getattr(self.llm, "model", "unknown")
+                # Estimate input tokens from prompt (rough: ~4 chars per token)
+                prompt_text = user_prompt + RESEARCH_SYSTEM_PROMPT
+                estimated_input_tokens = len(prompt_text) // 4
+                estimated_output_tokens = output_chars // 4
+                await usage_service.record_call(
+                    model=str(model_name),
+                    agent=AGENT_NAME,
+                    input_tokens=estimated_input_tokens,
+                    output_tokens=estimated_output_tokens,
+                )
+                logger.debug(f"Streaming tokens (estimated): in={estimated_input_tokens}, out={estimated_output_tokens}")
+
+        except UsageLimitExceeded as e:
+            logger.warning(f"Usage limit exceeded: {e}")
+            yield f"\n\n⚠️ **Usage limit reached**: {e.limit_type.capitalize()} limit of {e.limit:,} {e.metric} has been reached. Please try again later or contact the administrator."
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")

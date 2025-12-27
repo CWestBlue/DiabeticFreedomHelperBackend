@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     # LLM Settings
     llm_temperature: float = 0.0
 
+    # Usage Limits (set to 0 to disable)
+    daily_llm_call_limit: int = 100  # Max LLM calls per day (0 = unlimited)
+    monthly_llm_call_limit: int = 3000  # Max LLM calls per month (0 = unlimited)
+    daily_token_limit: int = 0  # Max tokens per day (0 = unlimited) - input + output
+    monthly_token_limit: int = 10000000  # Max tokens per month (0 = unlimited)
+    usage_tracking_enabled: bool = True  # Track usage even if limits are disabled
+
     # App
     debug: bool = False
     app_name: str = "Diabetic AI API"

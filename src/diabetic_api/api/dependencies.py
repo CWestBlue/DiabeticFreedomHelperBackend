@@ -12,6 +12,7 @@ from diabetic_api.db.unit_of_work import UnitOfWork
 from diabetic_api.services.chat import ChatService
 from diabetic_api.services.dashboard import DashboardService
 from diabetic_api.services.upload import UploadService
+from diabetic_api.services.usage import UsageService
 
 
 # Type aliases for cleaner route signatures
@@ -88,8 +89,22 @@ def get_upload_service(uow: UnitOfWork = Depends(get_uow)) -> UploadService:
     return UploadService(uow)
 
 
+def get_usage_service(db: AsyncIOMotorDatabase = Depends(get_database)) -> UsageService:
+    """
+    Get UsageService instance for LLM usage tracking.
+    
+    Args:
+        db: Injected database instance
+        
+    Returns:
+        UsageService instance
+    """
+    return UsageService(db)
+
+
 # Type aliases for service dependencies
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
 DashboardServiceDep = Annotated[DashboardService, Depends(get_dashboard_service)]
 UploadServiceDep = Annotated[UploadService, Depends(get_upload_service)]
+UsageServiceDep = Annotated[UsageService, Depends(get_usage_service)]
 
