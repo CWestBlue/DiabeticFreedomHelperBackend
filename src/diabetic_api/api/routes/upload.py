@@ -1,6 +1,6 @@
 """File upload API routes."""
 
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException
 
 from diabetic_api.api.dependencies import UploadServiceDep
 from diabetic_api.models.pump_data import UploadResult
@@ -12,6 +12,11 @@ router = APIRouter()
 async def upload_file(
     service: UploadServiceDep,
     file: UploadFile = File(..., description="Medtronic pump export CSV file"),
+    uploadedAt: str | None = Form(
+        None,
+        description="ISO timestamp with timezone offset (e.g., '2025-01-15T10:30:00-05:00'). "
+                    "Used to correctly convert local pump times to UTC.",
+    ),
 ):
     """
     Upload a Medtronic pump export CSV file.
@@ -19,6 +24,10 @@ async def upload_file(
     Parses the CSV and imports data into the database.
     
     - **file**: CSV file from Medtronic CareLink or pump export
+    - **uploadedAt**: ISO timestamp with timezone offset from client
+    
+    The uploadedAt timestamp is used to determine the timezone offset for
+    converting local pump Date/Time values to UTC Timestamps.
     
     Returns statistics about the import including:
     - records_processed: Total rows parsed
@@ -46,7 +55,7 @@ async def upload_file(
         )
     
     # Process the CSV
-    result = await service.process_csv(content, file.filename)
+    result = await service.process_csv(content, file.filename, uploaded_at=uploadedAt)
     
     if not result.success:
         raise HTTPException(

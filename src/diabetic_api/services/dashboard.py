@@ -74,10 +74,18 @@ class DashboardService:
         """
         pipeline = [
             # Stage 1: Add fields with conversions
+            # Note: Use $convert with onError for all numeric fields to handle empty strings
             {
                 "$addFields": {
                     "ts": "$Timestamp",
-                    "sg": {"$toDouble": {"$ifNull": ["$Sensor Glucose (mg/dL)", None]}},
+                    "sg": {
+                        "$convert": {
+                            "input": "$Sensor Glucose (mg/dL)",
+                            "to": "double",
+                            "onError": None,
+                            "onNull": None,
+                        }
+                    },
                     "carb_input": {
                         "$convert": {
                             "input": "$BWZ Carb Input (grams)",
@@ -451,56 +459,62 @@ class DashboardService:
                     "_id": "$ts",
                     "FinalBolus": {
                         "$max": {
-                            "$cond": [
-                                {"$in": ["$Final Bolus Estimate", [None, "", 0, "0"]]},
-                                None,
-                                {"$toDouble": "$Final Bolus Estimate"},
-                            ]
+                            "$convert": {
+                                "input": "$Final Bolus Estimate",
+                                "to": "double",
+                                "onError": None,
+                                "onNull": None,
+                            }
                         }
                     },
                     "ActiveInsulin": {
                         "$max": {
-                            "$cond": [
-                                {"$in": ["$BWZ Active Insulin (U)", [None, ""]]},
-                                None,
-                                {"$toDouble": "$BWZ Active Insulin (U)"},
-                            ]
+                            "$convert": {
+                                "input": "$BWZ Active Insulin (U)",
+                                "to": "double",
+                                "onError": None,
+                                "onNull": None,
+                            }
                         }
                     },
                     "InsulinNeededEstimate": {
                         "$max": {
-                            "$cond": [
-                                {"$in": ["$BWZ Estimate (U)", [None, "", 0, "0"]]},
-                                None,
-                                {"$toDouble": "$BWZ Estimate (U)"},
-                            ]
+                            "$convert": {
+                                "input": "$BWZ Estimate (U)",
+                                "to": "double",
+                                "onError": None,
+                                "onNull": None,
+                            }
                         }
                     },
                     "CarbInput": {
                         "$max": {
-                            "$cond": [
-                                {"$in": ["$BWZ Carb Input (grams)", [None, "", 0, "0"]]},
-                                None,
-                                {"$toDouble": "$BWZ Carb Input (grams)"},
-                            ]
+                            "$convert": {
+                                "input": "$BWZ Carb Input (grams)",
+                                "to": "double",
+                                "onError": None,
+                                "onNull": None,
+                            }
                         }
                     },
                     "BloodSugarCorrectionEstimate": {
                         "$max": {
-                            "$cond": [
-                                {"$in": ["$BWZ Correction Estimate (U)", [None, "", 0, "0"]]},
-                                None,
-                                {"$toDouble": "$BWZ Correction Estimate (U)"},
-                            ]
+                            "$convert": {
+                                "input": "$BWZ Correction Estimate (U)",
+                                "to": "double",
+                                "onError": None,
+                                "onNull": None,
+                            }
                         }
                     },
                     "CarbInsulinEstimate": {
                         "$max": {
-                            "$cond": [
-                                {"$in": ["$BWZ Food Estimate (U)", [None, "", 0, "0"]]},
-                                None,
-                                {"$toDouble": "$BWZ Food Estimate (U)"},
-                            ]
+                            "$convert": {
+                                "input": "$BWZ Food Estimate (U)",
+                                "to": "double",
+                                "onError": None,
+                                "onNull": None,
+                            }
                         }
                     },
                 }
