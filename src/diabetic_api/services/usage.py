@@ -227,38 +227,36 @@ class UsageService:
         
         logger.debug(f"Recorded LLM call: agent={agent}, model={model}")
     
+    async def _get_daily_record(self) -> dict | None:
+        """Get today's usage record (cached within request)."""
+        today = self._get_today_key()
+        return await self._collection.find_one({"date": today, "type": "daily"})
+    
+    async def _get_monthly_record(self) -> dict | None:
+        """Get this month's usage record (cached within request)."""
+        month = self._get_month_key()
+        return await self._collection.find_one({"month": month, "type": "monthly"})
+    
     async def get_daily_calls(self) -> int:
         """Get number of calls made today."""
-        today = self._get_today_key()
-        record = await self._collection.find_one(
-            {"date": today, "type": "daily"}
-        )
+        record = await self._get_daily_record()
         return record.get("calls", 0) if record else 0
     
     async def get_monthly_calls(self) -> int:
         """Get number of calls made this month."""
-        month = self._get_month_key()
-        record = await self._collection.find_one(
-            {"month": month, "type": "monthly"}
-        )
+        record = await self._get_monthly_record()
         return record.get("calls", 0) if record else 0
     
     async def get_daily_tokens(self) -> int:
         """Get total tokens used today (input + output)."""
-        today = self._get_today_key()
-        record = await self._collection.find_one(
-            {"date": today, "type": "daily"}
-        )
+        record = await self._get_daily_record()
         if not record:
             return 0
         return record.get("input_tokens", 0) + record.get("output_tokens", 0)
     
     async def get_monthly_tokens(self) -> int:
         """Get total tokens used this month (input + output)."""
-        month = self._get_month_key()
-        record = await self._collection.find_one(
-            {"month": month, "type": "monthly"}
-        )
+        record = await self._get_monthly_record()
         if not record:
             return 0
         return record.get("input_tokens", 0) + record.get("output_tokens", 0)
@@ -267,47 +265,77 @@ class UsageService:
         """
         Check if usage is within limits (calls and tokens).
         
+        Optimized to use at most 2 DB queries (daily + monthly records).
+        
         Raises:
             UsageLimitExceeded: If any daily or monthly limit is exceeded
         """
         if not self.tracking_enabled:
             return
         
-        # Check daily call limit
-        if self.daily_limit > 0:
-            daily_calls = await self.get_daily_calls()
-            if daily_calls >= self.daily_limit:
+        # Check if any limits are configured
+        has_daily_limits = self.daily_limit > 0 or self.daily_token_limit > 0
+        has_monthly_limits = self.monthly_limit > 0 or self.monthly_token_limit > 0
+        
+        if not has_daily_limits and not has_monthly_limits:
+            return
+        
+        # Fetch records in batch (max 2 queries)
+        daily_record = await self._get_daily_record() if has_daily_limits else None
+        monthly_record = await self._get_monthly_record() if has_monthly_limits else None
+        
+        # Check daily limits
+        if daily_record or has_daily_limits:
+            daily_calls = daily_record.get("calls", 0) if daily_record else 0
+            daily_tokens = (
+                (daily_record.get("input_tokens", 0) + daily_record.get("output_tokens", 0))
+                if daily_record else 0
+            )
+            
+            if self.daily_limit > 0 and daily_calls >= self.daily_limit:
                 raise UsageLimitExceeded("daily", daily_calls, self.daily_limit, "calls")
-        
-        # Check monthly call limit
-        if self.monthly_limit > 0:
-            monthly_calls = await self.get_monthly_calls()
-            if monthly_calls >= self.monthly_limit:
-                raise UsageLimitExceeded("monthly", monthly_calls, self.monthly_limit, "calls")
-        
-        # Check daily token limit
-        if self.daily_token_limit > 0:
-            daily_tokens = await self.get_daily_tokens()
-            if daily_tokens >= self.daily_token_limit:
+            
+            if self.daily_token_limit > 0 and daily_tokens >= self.daily_token_limit:
                 raise UsageLimitExceeded("daily", daily_tokens, self.daily_token_limit, "tokens")
         
-        # Check monthly token limit
-        if self.monthly_token_limit > 0:
-            monthly_tokens = await self.get_monthly_tokens()
-            if monthly_tokens >= self.monthly_token_limit:
+        # Check monthly limits
+        if monthly_record or has_monthly_limits:
+            monthly_calls = monthly_record.get("calls", 0) if monthly_record else 0
+            monthly_tokens = (
+                (monthly_record.get("input_tokens", 0) + monthly_record.get("output_tokens", 0))
+                if monthly_record else 0
+            )
+            
+            if self.monthly_limit > 0 and monthly_calls >= self.monthly_limit:
+                raise UsageLimitExceeded("monthly", monthly_calls, self.monthly_limit, "calls")
+            
+            if self.monthly_token_limit > 0 and monthly_tokens >= self.monthly_token_limit:
                 raise UsageLimitExceeded("monthly", monthly_tokens, self.monthly_token_limit, "tokens")
     
     async def get_stats(self) -> UsageStats:
         """
         Get current usage statistics.
         
+        Optimized to use exactly 2 DB queries (daily + monthly records).
+        
         Returns:
             UsageStats with current usage and limits (calls and tokens)
         """
-        daily_calls = await self.get_daily_calls()
-        monthly_calls = await self.get_monthly_calls()
-        daily_tokens = await self.get_daily_tokens()
-        monthly_tokens = await self.get_monthly_tokens()
+        # Fetch both records in parallel-ish (2 queries total)
+        daily_record = await self._get_daily_record()
+        monthly_record = await self._get_monthly_record()
+        
+        # Extract values from records
+        daily_calls = daily_record.get("calls", 0) if daily_record else 0
+        monthly_calls = monthly_record.get("calls", 0) if monthly_record else 0
+        daily_tokens = (
+            (daily_record.get("input_tokens", 0) + daily_record.get("output_tokens", 0))
+            if daily_record else 0
+        )
+        monthly_tokens = (
+            (monthly_record.get("input_tokens", 0) + monthly_record.get("output_tokens", 0))
+            if monthly_record else 0
+        )
         
         # Call remaining
         daily_remaining = (

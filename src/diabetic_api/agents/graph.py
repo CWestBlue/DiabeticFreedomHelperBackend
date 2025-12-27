@@ -333,7 +333,6 @@ class StreamingChatGraph:
 
         try:
             final_state = state
-            response_yielded = False
 
             async for event in self.graph.astream(state, config=config):
                 # Track state updates from each node

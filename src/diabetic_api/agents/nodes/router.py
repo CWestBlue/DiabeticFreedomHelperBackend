@@ -103,6 +103,9 @@ Current User Message: {state['message']}"""
             
             logger.info(f"Router decision: {route_decision['workflow']} (index {route_decision['workflow_index']})")
             
+        except UsageLimitExceeded:
+            # Re-raise usage limit exceptions - don't swallow them
+            raise
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse router response: {e}")
             # Default to research_query (safest option - will try query and interpret)

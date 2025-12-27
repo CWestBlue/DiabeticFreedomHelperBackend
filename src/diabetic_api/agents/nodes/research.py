@@ -112,6 +112,10 @@ class ResearchAgent:
 
             return {"response": response_text}
 
+        except UsageLimitExceeded:
+            # Re-raise usage limit exceptions - don't swallow them
+            raise
+
         except Exception as e:
             logger.error(f"Research agent error: {e}")
 

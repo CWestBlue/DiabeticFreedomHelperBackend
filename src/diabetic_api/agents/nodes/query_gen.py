@@ -152,6 +152,9 @@ class QueryGenAgent:
                 "_retry_count": 0,  # Reset on success
             }
             
+        except UsageLimitExceeded:
+            # Re-raise usage limit exceptions - don't swallow them
+            raise
         except json.JSONDecodeError as e:
             error_msg = f"Invalid JSON in generated query: {str(e)}"
             logger.warning(error_msg)
