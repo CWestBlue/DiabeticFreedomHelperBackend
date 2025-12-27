@@ -147,15 +147,12 @@ class CareLinkSyncService:
         if chrome_bin and os.path.exists(chrome_bin):
             options.binary_location = chrome_bin
         
-        # Headless mode - can be disabled for debugging
-        # Set CARELINK_HEADLESS=false to run with visible browser for debugging
-        headless = os.environ.get("CARELINK_HEADLESS", "true").lower() != "false"
-        
-        if headless:
+        # Headless mode - can be disabled for debugging via CARELINK_HEADLESS=false in .env
+        if self.settings.carelink_headless:
             options.add_argument("--headless=new")
-            logger.info("Running in headless mode")
+            logger.info("Running in HEADLESS mode")
         else:
-            logger.info("Running in VISIBLE mode (for debugging)")
+            logger.info("Running in VISIBLE mode (browser window will open)")
         
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")

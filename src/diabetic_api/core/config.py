@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     carelink_username: str = ""
     carelink_password: str = ""
     carelink_country_code: str = "us"
+    carelink_headless: bool = True  # Set to False to see browser window for debugging
     sync_schedule_enabled: bool = False  # Enable weekly auto-sync
     sync_schedule_day: int = 0  # 0=Monday, 6=Sunday
     sync_schedule_hour: int = 6  # Hour in 24h format (0-23)
