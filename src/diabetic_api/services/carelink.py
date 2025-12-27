@@ -644,169 +644,38 @@ class CareLinkSyncService:
         """
         Set the date range for the report.
         
+        NOTE: CareLink's datepicker is a complex Angular Material component.
+        For now, we skip date selection and use CareLink's default range.
+        The UploadService handles deduplication, so extra data is filtered out.
+        
         Args:
-            start_date: Start date for report
-            end_date: End date for report
+            start_date: Start date for report (logged but not yet used)
+            end_date: End date for report (logged but not yet used)
             
         Returns:
-            True if date range set successfully
+            True (always continues with default range)
         """
-        from selenium.webdriver.common.keys import Keys
-        
-        # Format dates as MM/DD/YYYY (common US format for CareLink)
+        # Format dates for logging
         start_str = start_date.strftime("%m/%d/%Y")
         end_str = end_date.strftime("%m/%d/%Y")
-        logger.info(f"Setting date range: {start_str} to {end_str}")
         
-        try:
-            # Look for date range picker trigger
-            date_picker_selectors = [
-                "//div[contains(@class, 'date-range')]",
-                "//button[contains(@class, 'date')]",
-                "//mat-date-range-input",
-                "//*[contains(@class, 'datepicker')]",
-                "//*[contains(text(), 'Date Range')]",
-            ]
-            
-            date_picker = None
-            for selector in date_picker_selectors:
-                try:
-                    date_picker = self._wait_for_element(
-                        By.XPATH,
-                        selector,
-                        timeout=5,
-                        clickable=True,
-                    )
-                    logger.info(f"Found date picker with selector: {selector}")
-                    break
-                except TimeoutException:
-                    continue
-            
-            if not date_picker:
-                logger.warning("Could not find date picker, using default range")
-                return True  # Continue with default range
-            
-            date_picker.click()
-            time.sleep(1)
-            
-            # Try to find start date input field
-            start_input_selectors = [
-                "//input[contains(@placeholder, 'Start') or contains(@aria-label, 'Start')]",
-                "//input[@formcontrolname='start']",
-                "//input[contains(@class, 'start')]",
-                "(//input[contains(@class, 'mat-date')])[1]",
-                "//mat-date-range-input//input[1]",
-            ]
-            
-            start_input = None
-            for selector in start_input_selectors:
-                try:
-                    start_input = self._driver.find_element(By.XPATH, selector)
-                    if start_input.is_displayed():
-                        logger.info(f"Found start input with: {selector}")
-                        break
-                except Exception:
-                    continue
-            
-            if start_input:
-                # Use JavaScript to set value (Angular Material inputs aren't directly interactable)
-                self._driver.execute_script(
-                    "arguments[0].value = arguments[1]; "
-                    "arguments[0].dispatchEvent(new Event('input', { bubbles: true })); "
-                    "arguments[0].dispatchEvent(new Event('change', { bubbles: true }));",
-                    start_input,
-                    start_str,
-                )
-                logger.info(f"Set start date via JS: {start_str}")
-                time.sleep(0.5)
-            
-            # Try to find end date input field
-            end_input_selectors = [
-                "//input[contains(@placeholder, 'End') or contains(@aria-label, 'End')]",
-                "//input[@formcontrolname='end']",
-                "//input[contains(@class, 'end')]",
-                "(//input[contains(@class, 'mat-date')])[2]",
-                "//mat-date-range-input//input[2]",
-            ]
-            
-            end_input = None
-            for selector in end_input_selectors:
-                try:
-                    end_input = self._driver.find_element(By.XPATH, selector)
-                    if end_input.is_displayed():
-                        logger.info(f"Found end input with: {selector}")
-                        break
-                except Exception:
-                    continue
-            
-            if end_input:
-                # Use JavaScript to set value (Angular Material inputs aren't directly interactable)
-                self._driver.execute_script(
-                    "arguments[0].value = arguments[1]; "
-                    "arguments[0].dispatchEvent(new Event('input', { bubbles: true })); "
-                    "arguments[0].dispatchEvent(new Event('change', { bubbles: true }));",
-                    end_input,
-                    end_str,
-                )
-                logger.info(f"Set end date via JS: {end_str}")
-                time.sleep(0.5)
-            
-            # Click Apply button to confirm the date range
-            apply_selectors = [
-                "//button[contains(text(), 'Apply')]",
-                "//button[contains(text(), 'APPLY')]",
-                "//button[contains(@class, 'apply')]",
-                "//span[contains(text(), 'Apply')]/parent::button",
-                "//button[contains(@class, 'mat-primary')]",
-            ]
-            
-            apply_btn = None
-            for selector in apply_selectors:
-                try:
-                    apply_btn = self._wait_for_element(
-                        By.XPATH,
-                        selector,
-                        timeout=3,
-                        clickable=True,
-                    )
-                    break
-                except TimeoutException:
-                    continue
-            
-            if apply_btn:
-                apply_btn.click()
-                logger.info("Clicked Apply button on date picker")
-                time.sleep(1)
-            else:
-                # No Apply button found, try pressing Escape or Enter
-                body = self._driver.find_element(By.TAG_NAME, "body")
-                body.send_keys(Keys.ESCAPE)
-                logger.info("No Apply button found, sent Escape to close datepicker")
-                time.sleep(0.5)
-            
-            # Wait for datepicker overlay to close
-            try:
-                WebDriverWait(self._driver, 3).until(
-                    EC.invisibility_of_element_located(
-                        (By.CSS_SELECTOR, "div.cdk-overlay-backdrop")
-                    )
-                )
-                logger.info("Datepicker overlay closed")
-            except TimeoutException:
-                logger.warning("Datepicker overlay may still be open")
-            
-            logger.info("Date range selection completed")
-            return True
-            
-        except Exception as e:
-            logger.warning(f"Error setting date range: {e}, continuing with default")
-            # Try to close any open overlay
-            try:
-                body = self._driver.find_element(By.TAG_NAME, "body")
-                body.send_keys(Keys.ESCAPE)
-            except Exception:
-                pass
-            return True  # Continue with default range
+        logger.info(f"Desired date range: {start_str} to {end_str}")
+        logger.warning(
+            "Date picker manipulation not yet implemented - "
+            "using CareLink's default range. "
+            "UploadService will filter duplicates."
+        )
+        
+        # TODO: Implement proper date range selection
+        # CareLink uses Angular Material date range picker which requires:
+        # 1. Click date range bar to open calendar
+        # 2. Navigate calendar to correct month
+        # 3. Click start date
+        # 4. Click end date
+        # 5. Click Apply
+        # For now, we rely on UploadService deduplication
+        
+        return True
     
     def _trigger_export(self) -> str | None:
         """
@@ -926,22 +795,32 @@ class CareLinkSyncService:
         """
         Get the latest timestamp from existing data.
         
+        Uses the same query pattern as the dashboard service.
+        
         Returns:
             Latest timestamp or None if no data exists
         """
-        collection = self.uow.get_collection("PumpData")
-        
         pipeline = [
             {"$match": {"Timestamp": {"$ne": None}}},
-            {"$group": {"_id": None, "Latest": {"$max": "$Timestamp"}}},
-            {"$project": {"_id": 0, "Latest": 1}},
+            {
+                "$group": {
+                    "_id": None,
+                    "Earliest": {"$min": "$Timestamp"},
+                    "Latest": {"$max": "$Timestamp"},
+                }
+            },
+            {"$project": {"_id": 0, "Earliest": 1, "Latest": 1}},
         ]
         
-        cursor = collection.aggregate(pipeline)
-        results = await cursor.to_list(length=1)
+        results = await self.uow.pump_data.aggregate(pipeline, limit=1)
         
-        if results and results[0].get("Latest"):
-            return results[0]["Latest"]
+        if results:
+            earliest = results[0].get("Earliest")
+            latest = results[0].get("Latest")
+            logger.info(f"Database date range: Earliest={earliest}, Latest={latest}")
+            return latest
+        
+        logger.info("No existing data found in database")
         return None
     
     async def sync(self) -> SyncResult:
