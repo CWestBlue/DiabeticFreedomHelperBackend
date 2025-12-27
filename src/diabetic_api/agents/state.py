@@ -17,36 +17,50 @@ class RouteDecision(TypedDict):
     workflow_index: int  # 0-4
 
 
+class FullDataset(TypedDict):
+    """Full dataset for research_full workflows."""
+
+    sensorData: str  # CSV of sensor glucose readings (3-hour averages)
+    basalData: str  # CSV of basal rate changes
+    bolusData: str  # CSV of bolus/carb entries
+
+
 class ChatState(TypedDict, total=False):
     """
     State that flows through the LangGraph.
-    
+
     This state is passed between nodes and accumulates data
     as the graph executes.
     """
-    
+
     # Input
     message: str  # User's current message
     history: list[dict]  # Previous chat messages
     session_id: str  # Chat session ID
-    
+
     # Database access
     uow: UnitOfWork  # Unit of Work for database operations
-    
+
     # Router output
     route_decision: RouteDecision | None
-    
+
     # Query generator output
     generated_query: str | None  # MongoDB aggregation pipeline as JSON string
     query_results: list[dict[str, Any]] | None  # Query execution results
     last_error: str | None  # Last query execution error (for retry)
-    
+
+    # Full data output (for research_full and research_full_query workflows)
+    full_data: FullDataset | None  # Complete 90-day dataset
+
     # Research agent output
     research_context: str | None  # Additional context for research
-    
+
     # Final output
     response: str  # Final response to stream to user
     response_chunks: Annotated[list[str], add]  # Accumulated response chunks
+
+    # Internal tracking
+    _retry_count: int  # Query retry counter
 
 
 def create_initial_state(
@@ -57,13 +71,13 @@ def create_initial_state(
 ) -> ChatState:
     """
     Create initial state for graph execution.
-    
+
     Args:
         message: User's message
         history: Chat history
         uow: Unit of Work instance
         session_id: Chat session ID
-        
+
     Returns:
         Initial ChatState
     """
@@ -76,8 +90,10 @@ def create_initial_state(
         generated_query=None,
         query_results=None,
         last_error=None,
+        full_data=None,
         research_context=None,
         response="",
         response_chunks=[],
+        _retry_count=0,
     )
 

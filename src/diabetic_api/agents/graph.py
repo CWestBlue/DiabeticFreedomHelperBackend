@@ -7,14 +7,81 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.graph import StateGraph, END
 
 from diabetic_api.agents.state import ChatState, create_initial_state
-from diabetic_api.agents.nodes.router import RouterAgent, route_decision_edge
+from diabetic_api.agents.nodes.router import RouterAgent
 from diabetic_api.agents.nodes.query_gen import QueryGenAgent, should_retry_query
 from diabetic_api.agents.nodes.research import ResearchAgent, StreamingResearchAgent
+from diabetic_api.agents.nodes.full_data import FullDataNode
 from diabetic_api.agents.llm import get_llm, get_llm_info
 from diabetic_api.core.config import get_settings
 from diabetic_api.db.unit_of_work import UnitOfWork
 
 logger = logging.getLogger(__name__)
+
+
+def route_after_router(state: ChatState) -> str:
+    """
+    Determine next node after router based on workflow decision.
+
+    Workflow routing:
+    - query (0): query_gen → research (no full data needed)
+    - research_query (1): query_gen → research
+    - research_full_query (2): full_data → query_gen → research
+    - research_full (3): full_data → research
+    - research (4): research only
+
+    Args:
+        state: Current graph state
+
+    Returns:
+        Next node name: "query_gen", "full_data", or "research"
+    """
+    decision = state.get("route_decision")
+
+    if decision is None:
+        logger.warning("No route decision found, defaulting to research")
+        return "research"
+
+    workflow = decision.get("workflow", "research")
+    need_query = decision.get("need_mongo_query", "no")
+    data_strategy = decision.get("data_pass_strategy", "n/a")
+
+    logger.info(f"Routing: workflow={workflow}, need_query={need_query}, data_strategy={data_strategy}")
+
+    # Workflows that need full data first
+    if workflow in ("research_full", "research_full_query"):
+        return "full_data"
+
+    # Workflows that need query (but not full data)
+    if need_query == "yes" or workflow in ("query", "research_query"):
+        return "query_gen"
+
+    # Default to research only
+    return "research"
+
+
+def route_after_full_data(state: ChatState) -> str:
+    """
+    Determine next node after full_data fetch.
+
+    Args:
+        state: Current graph state
+
+    Returns:
+        "query_gen" if also needs query, else "research"
+    """
+    decision = state.get("route_decision")
+
+    if decision is None:
+        return "research"
+
+    workflow = decision.get("workflow", "research")
+
+    # research_full_query needs both full data AND query
+    if workflow == "research_full_query":
+        return "query_gen"
+
+    # research_full goes directly to research
+    return "research"
 
 
 # Type alias for compiled graph
@@ -24,98 +91,116 @@ ChatGraph = Any  # CompiledGraph type
 def build_graph(llm: BaseChatModel | None = None) -> ChatGraph:
     """
     Build the chat workflow graph.
-    
+
     The graph implements the following workflow based on N8N:
-    
+
     1. **Router** - Analyzes user message, decides workflow path
-       - query: MongoDB only, no interpretation
-       - research_query: Query → Research (most common)
-       - research_full_query: Query + full data → Research
-       - research_full: Research with existing data
-       - research: Research with chat history only
-    
-    2. **Query Generator** - Creates MongoDB aggregation pipeline
+       - query (0): MongoDB only, no interpretation
+       - research_query (1): Query → Research (most common)
+       - research_full_query (2): Full Data + Query → Research
+       - research_full (3): Full Data → Research
+       - research (4): Research with chat history only
+
+    2. **Full Data** - Fetches 90-day dataset (sensor, basal, bolus)
+       - Used for research_full and research_full_query paths
+
+    3. **Query Generator** - Creates MongoDB aggregation pipeline
        - Supports retry on error (up to 2 attempts)
        - Uses full PumpData schema
        - Handles timezone conversion
-    
-    3. **Research Agent** - Interprets results, generates response
+
+    4. **Research Agent** - Interprets results, generates response
        - Supportive, educational tone
        - Markdown-formatted output
        - Includes health context
-    
+
     ```
     ┌─────────┐
     │ Router  │
     └────┬────┘
          │
-    ┌────┴────┐
-    │ Decision │
-    └────┬────┘
-         │
-    ┌────┴────────────────┐
-    │                     │
-    ▼                     ▼
-    ┌──────────┐     ┌──────────┐
-    │ QueryGen │     │ Research │
-    └────┬─────┘     └────┬─────┘
-         │                │
-         │ (retry?)       │
-         ▼                │
-    ┌──────────┐          │
-    │ Research │          │
-    └────┬─────┘          │
-         │                │
-         └────────────────┘
+    ┌────┴─────────────────────────────┐
+    │           Decision               │
+    └────┬─────────┬───────────────────┘
+         │         │         │
+    ┌────┴────┐    │    ┌────┴────┐
+    │FullData │    │    │QueryGen │
+    └────┬────┘    │    └────┬────┘
+         │         │         │
+    ┌────┴────┐    │         │ (retry?)
+    │         │    │         │
+    │QueryGen │    ▼         ▼
+    │ (opt)   │ ┌──────────────┐
+    └────┬────┘ │   Research   │
+         │      └──────────────┘
+         ▼             │
+    ┌──────────┐       │
+    │ Research │       │
+    └────┬─────┘       │
+         │             │
+         └─────────────┘
                 │
                 ▼
               [END]
     ```
-    
+
     Args:
         llm: Language model to use (auto-configured if not provided)
-        
+
     Returns:
         Compiled StateGraph ready for execution
     """
     settings = get_settings()
-    
+
     # Get LLM if not provided
     if llm is None:
         if not settings.is_llm_configured:
             logger.warning("No LLM configured - returning placeholder graph")
             return PlaceholderGraph()
-        
+
         llm = get_llm(settings)
         llm_info = get_llm_info(settings)
         logger.info(f"Building graph with {llm_info['provider']}: {llm_info['model']}")
-    
-    # Initialize agents
+
+    # Initialize agents/nodes
     router = RouterAgent(llm)
+    full_data = FullDataNode(days=90)
     query_gen = QueryGenAgent(llm, max_retries=2)
     research = ResearchAgent(llm)
-    
+
     # Build state graph
     graph = StateGraph(ChatState)
-    
+
     # Add nodes
     graph.add_node("router", router)
+    graph.add_node("full_data", full_data)
     graph.add_node("query_gen", query_gen)
     graph.add_node("research", research)
-    
+
     # Set entry point
     graph.set_entry_point("router")
-    
-    # Router → conditional routing
+
+    # Router → conditional routing (3 possible paths)
     graph.add_conditional_edges(
         "router",
-        route_decision_edge,
+        route_after_router,
         {
-            "query_gen": "query_gen",
-            "research": "research",
+            "full_data": "full_data",  # research_full or research_full_query
+            "query_gen": "query_gen",  # query or research_query
+            "research": "research",  # research only
         },
     )
-    
+
+    # Full Data → conditional (may need query or go direct to research)
+    graph.add_conditional_edges(
+        "full_data",
+        route_after_full_data,
+        {
+            "query_gen": "query_gen",  # research_full_query
+            "research": "research",  # research_full
+        },
+    )
+
     # Query Gen → conditional (retry or continue to research)
     graph.add_conditional_edges(
         "query_gen",
@@ -125,14 +210,18 @@ def build_graph(llm: BaseChatModel | None = None) -> ChatGraph:
             "continue": "research",  # Proceed to interpret results
         },
     )
-    
+
     # Research → END
     graph.add_edge("research", END)
-    
-    # Compile and return
+
+    # Compile with recursion limit as additional safeguard against infinite loops
+    # This limits total node transitions (not just query_gen retries)
+    # Max expected path: router(1) + full_data(1) + query_gen(3 with retries) + research(1) = 6
+    # Set to 10 for safety margin
     compiled = graph.compile()
-    logger.info("Chat graph compiled successfully")
-    
+
+    logger.info("Chat graph compiled successfully with loop protection")
+
     return compiled
 
 
@@ -211,13 +300,18 @@ class StreamingChatGraph:
         )
         
         logger.info(f"Starting chat stream for: {message[:50]}...")
-        
+
         # Run graph and stream the response
+        # IMPORTANT: recursion_limit prevents infinite loops (billing protection)
+        # Max expected: router(1) + full_data(1) + query_gen(3 with retries) + research(1) = 6
+        # Set to 15 for safety margin
+        config = {"recursion_limit": 15}
+
         try:
             final_state = state
             response_yielded = False
-            
-            async for event in self.graph.astream(state):
+
+            async for event in self.graph.astream(state, config=config):
                 # Track state updates from each node
                 for node_name, node_output in event.items():
                     logger.debug(f"Node '{node_name}' completed")

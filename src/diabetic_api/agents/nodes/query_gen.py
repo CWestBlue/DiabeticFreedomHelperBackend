@@ -77,12 +77,16 @@ class QueryGenAgent:
             
             logger.debug(f"Generated query: {query_text[:200]}...")
             
-            # Check for error response
+            # Check for error response (e.g., user asked to write data)
+            # This is a legitimate refusal, not a retry-able error
             if query_text.startswith("ERROR:"):
+                logger.warning(f"Query generator refused: {query_text}")
                 return {
                     "generated_query": None,
                     "query_results": None,
                     "last_error": query_text,
+                    # Set to max to prevent retries - this is intentional refusal
+                    "_retry_count": self.max_retries,
                 }
             
             # Parse pipeline
@@ -179,19 +183,34 @@ class QueryGenAgent:
 def should_retry_query(state: ChatState) -> str:
     """
     Conditional edge for query retry logic.
-    
+
+    IMPORTANT: This function has safeguards to prevent infinite loops:
+    - Hard cap of 2 retries (3 total attempts max)
+    - Only retries if there's both an error AND retry_count is below max
+
     Args:
         state: Current graph state
-        
+
     Returns:
         "retry" if should retry query_gen, "continue" to proceed to research
     """
     last_error = state.get("last_error")
     retry_count = state.get("_retry_count", 0)
-    max_retries = 2
-    
-    if last_error and retry_count < max_retries:
-        logger.info(f"Will retry query (attempt {retry_count + 1}/{max_retries})")
+
+    # Hard cap on retries to prevent infinite loops (billing protection)
+    MAX_RETRIES = 2  # Maximum 2 retries = 3 total attempts
+
+    # Safety check: if retry_count is somehow invalid, don't retry
+    if not isinstance(retry_count, int) or retry_count < 0:
+        logger.warning(f"Invalid retry_count: {retry_count}, proceeding to research")
+        return "continue"
+
+    # Only retry if there's an error AND we haven't hit the cap
+    if last_error and retry_count < MAX_RETRIES:
+        logger.info(f"Will retry query (attempt {retry_count + 1}/{MAX_RETRIES})")
         return "retry"
-    
+
+    if last_error:
+        logger.warning(f"Max retries ({MAX_RETRIES}) reached, proceeding with error: {last_error[:100]}")
+
     return "continue"

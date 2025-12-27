@@ -42,53 +42,58 @@ class ResearchAgent:
     async def __call__(self, state: ChatState) -> dict:
         """
         Generate research response based on available context.
-        
+
         Args:
-            state: Current graph state with message, query_results, history
-            
+            state: Current graph state with message, query_results, history, full_data
+
         Returns:
             Dict with response to merge into state
         """
         logger.info("Research agent generating response...")
-        
+
         # Get available context
         query_results = state.get("query_results")
         chat_history = state.get("history", [])
         last_error = state.get("last_error")
         route_decision = state.get("route_decision")
-        
+        full_data = state.get("full_data")
+
         # Log context
         if query_results:
             logger.info(f"Using {len(query_results)} query results")
+        if full_data:
+            sensor_lines = len(full_data.get("sensorData", "").split("\n")) if full_data.get("sensorData") else 0
+            logger.info(f"Using full dataset with ~{sensor_lines} sensor readings")
         if last_error:
             logger.info(f"Query had error: {last_error[:50]}...")
-        
-        # Format the prompt with all context
+
+        # Format the prompt with all context (including full_data)
         user_prompt = format_research_prompt(
             question=state["message"],
             query_results=query_results,
             chat_history=chat_history,
             last_error=last_error,
+            full_data=full_data,
         )
-        
+
         # Build messages
         messages = [
             SystemMessage(content=RESEARCH_SYSTEM_PROMPT.format(context="")),
             HumanMessage(content=user_prompt),
         ]
-        
+
         try:
             # Generate response
             response = await self.llm.ainvoke(messages)
             response_text = response.content
-            
+
             logger.info(f"Generated response: {len(response_text)} chars")
-            
+
             return {"response": response_text}
-            
+
         except Exception as e:
             logger.error(f"Research agent error: {e}")
-            
+
             # Generate fallback response
             fallback = self._generate_fallback(state, str(e))
             return {"response": fallback}
@@ -131,39 +136,41 @@ class StreamingResearchAgent(ResearchAgent):
     async def stream(self, state: ChatState):
         """
         Stream response chunks.
-        
+
         Args:
             state: Current graph state
-            
+
         Yields:
             Response text chunks
         """
         logger.info("Research agent streaming response...")
-        
+
         # Get context
         query_results = state.get("query_results")
         chat_history = state.get("history", [])
         last_error = state.get("last_error")
-        
-        # Format prompt
+        full_data = state.get("full_data")
+
+        # Format prompt (including full_data)
         user_prompt = format_research_prompt(
             question=state["message"],
             query_results=query_results,
             chat_history=chat_history,
             last_error=last_error,
+            full_data=full_data,
         )
-        
+
         messages = [
             SystemMessage(content=RESEARCH_SYSTEM_PROMPT.format(context="")),
             HumanMessage(content=user_prompt),
         ]
-        
+
         try:
             # Stream response
             async for chunk in self.llm.astream(messages):
                 if hasattr(chunk, 'content') and chunk.content:
                     yield chunk.content
-                    
+
         except Exception as e:
             logger.error(f"Streaming error: {e}")
             yield self._generate_fallback(state, str(e))
