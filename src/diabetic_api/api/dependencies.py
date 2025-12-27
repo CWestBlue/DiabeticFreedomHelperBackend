@@ -9,6 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from diabetic_api.core.config import Settings, get_settings
 from diabetic_api.db.mongo import MongoDB
 from diabetic_api.db.unit_of_work import UnitOfWork
+from diabetic_api.services.carelink import CareLinkSyncService
 from diabetic_api.services.chat import ChatService
 from diabetic_api.services.dashboard import DashboardService
 from diabetic_api.services.upload import UploadService
@@ -102,7 +103,25 @@ def get_usage_service(db: AsyncIOMotorDatabase = Depends(get_database)) -> Usage
     return UsageService(db)
 
 
+def get_carelink_service(
+    uow: UnitOfWork = Depends(get_uow),
+    upload_service: UploadService = Depends(get_upload_service),
+) -> CareLinkSyncService:
+    """
+    Get CareLinkSyncService instance for CareLink data sync.
+    
+    Args:
+        uow: Injected Unit of Work
+        upload_service: Injected UploadService for processing CSV
+        
+    Returns:
+        CareLinkSyncService instance
+    """
+    return CareLinkSyncService(uow, upload_service=upload_service)
+
+
 # Type aliases for service dependencies
+CareLinkServiceDep = Annotated[CareLinkSyncService, Depends(get_carelink_service)]
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
 DashboardServiceDep = Annotated[DashboardService, Depends(get_dashboard_service)]
 UploadServiceDep = Annotated[UploadService, Depends(get_upload_service)]

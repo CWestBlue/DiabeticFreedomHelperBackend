@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from diabetic_api.api.routes import chat, dashboard, sessions, upload, usage
+from diabetic_api.api.routes import chat, dashboard, sessions, sync, upload, usage
 from diabetic_api.core.config import get_settings
 from diabetic_api.core.exceptions import APIError
 from diabetic_api.db.mongo import MongoDB
@@ -19,6 +19,8 @@ async def lifespan(app: FastAPI):
     
     Handles startup and shutdown events.
     """
+    from diabetic_api.core.scheduler import start_scheduler, stop_scheduler
+    
     # Startup
     settings = get_settings()
     print(f"🚀 Starting {settings.app_name} v{settings.api_version}")
@@ -27,10 +29,16 @@ async def lifespan(app: FastAPI):
     MongoDB.connect(settings.mongo_uri, settings.db_name)
     print("✅ MongoDB connected")
     
+    # Start scheduler for automated sync
+    scheduler = start_scheduler(settings)
+    if scheduler:
+        print("⏰ Background scheduler started")
+    
     yield
     
     # Shutdown
     print("👋 Shutting down...")
+    stop_scheduler()
     MongoDB.close()
     print("✅ MongoDB connection closed")
 
@@ -79,6 +87,9 @@ def create_app() -> FastAPI:
     async def health_check():
         """Health check endpoint."""
         from diabetic_api.agents.llm import get_llm_info
+        from diabetic_api.core.scheduler import get_scheduler
+        
+        scheduler = get_scheduler()
         
         return {
             "status": "healthy",
@@ -86,6 +97,10 @@ def create_app() -> FastAPI:
             "version": settings.api_version,
             "mongodb": MongoDB.is_connected(),
             "llm": get_llm_info(settings),
+            "carelink": {
+                "configured": settings.is_carelink_configured,
+                "scheduler_running": scheduler.running if scheduler else False,
+            },
         }
     
     # Root endpoint
@@ -105,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
     app.include_router(upload.router, prefix="/upload", tags=["Upload"])
     app.include_router(usage.router, prefix="/usage", tags=["Usage"])
+    app.include_router(sync.router, prefix="/sync", tags=["Sync"])
     
     return app
 
