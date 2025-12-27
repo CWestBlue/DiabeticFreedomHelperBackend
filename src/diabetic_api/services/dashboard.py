@@ -254,6 +254,8 @@ class DashboardService:
                         },
                     ],
                     "dailyBasal": [
+                        # Time-weighted basal calculation (matches N8N logic)
+                        # Calculates rate × duration for each segment instead of simple average
                         {"$match": {"basal_rate": {"$ne": None}}},
                         {"$sort": {"ts": 1}},
                         {
@@ -265,13 +267,69 @@ class DashboardService:
                                         "timezone": "America/Chicago",
                                     }
                                 },
+                                "times": {"$push": "$ts"},
                                 "rates": {"$push": "$basal_rate"},
                             }
                         },
                         {
+                            # Create shifted times array: [t1, t2, ..., end_of_day]
+                            # Each rate applies from its time until the next timestamp
                             "$addFields": {
-                                # Simplified: average rate * 24 hours
-                                "basal_units_sum": {"$multiply": [{"$avg": "$rates"}, 24]}
+                                "timesShift": {
+                                    "$concatArrays": [
+                                        # Skip first element, take rest
+                                        {"$slice": ["$times", 1, {"$size": "$times"}]},
+                                        # Append end of day (start of day + 24 hours in ms)
+                                        [{"$add": ["$_id", 86400000]}],
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            # Calculate time-weighted basal units for the day
+                            "$addFields": {
+                                "basal_units_sum": {
+                                    "$let": {
+                                        "vars": {
+                                            # Zip: [[rate, start_time, end_time], ...]
+                                            "zipped": {
+                                                "$zip": {
+                                                    "inputs": ["$rates", "$times", "$timesShift"]
+                                                }
+                                            }
+                                        },
+                                        "in": {
+                                            "$reduce": {
+                                                "input": "$$zipped",
+                                                "initialValue": 0,
+                                                "in": {
+                                                    "$add": [
+                                                        "$$value",
+                                                        {
+                                                            "$multiply": [
+                                                                # Rate (U/h)
+                                                                {"$arrayElemAt": ["$$this", 0]},
+                                                                {
+                                                                    # Duration in hours
+                                                                    "$divide": [
+                                                                        {
+                                                                            # Duration in ms
+                                                                            "$subtract": [
+                                                                                {"$arrayElemAt": ["$$this", 2]},
+                                                                                {"$arrayElemAt": ["$$this", 1]},
+                                                                            ]
+                                                                        },
+                                                                        3600000,  # ms per hour
+                                                                    ]
+                                                                },
+                                                            ]
+                                                        },
+                                                    ]
+                                                },
+                                            }
+                                        },
+                                    }
+                                }
                             }
                         },
                         {
