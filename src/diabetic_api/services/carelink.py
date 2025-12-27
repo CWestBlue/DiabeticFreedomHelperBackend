@@ -156,10 +156,24 @@ class CareLinkSyncService:
         # Set window size (important for button positioning)
         options.add_argument("--window-size=1920,1080")
         
-        # Disable automation flags to avoid detection
+        # Anti-detection measures
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
+        
+        # Set realistic user agent
+        user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+        options.add_argument(f"--user-agent={user_agent}")
+        
+        # Additional settings to appear more like real browser
+        options.add_argument("--disable-infobars")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--enable-javascript")
+        options.add_argument("--lang=en-US,en")
         
         # Configure downloads
         prefs = {
@@ -285,6 +299,73 @@ class CareLinkSyncService:
             except Exception as e:
                 logger.warning(f"Could not save screenshot: {e}")
 
+    def _wait_for_angular_load(self, timeout: int = 30) -> bool:
+        """
+        Wait for Angular/SPA to finish loading.
+        
+        CareLink uses a JavaScript SPA that renders content after page load.
+        """
+        logger.info("Waiting for SPA to render...")
+        
+        try:
+            # Wait for document ready state
+            WebDriverWait(self._driver, timeout).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+            
+            # Wait for Angular to stabilize (if Angular app)
+            try:
+                self._driver.execute_script(
+                    """
+                    if (window.getAllAngularTestabilities) {
+                        return window.getAllAngularTestabilities().every(t => t.isStable());
+                    }
+                    return true;
+                    """
+                )
+            except Exception:
+                pass  # Not an Angular app or script failed
+            
+            # Give extra time for dynamic content
+            time.sleep(3)
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Error waiting for SPA: {e}")
+            return False
+
+    def _check_for_iframes(self) -> bool:
+        """
+        Check if login form is inside an iframe and switch to it.
+        """
+        try:
+            iframes = self._driver.find_elements(By.TAG_NAME, "iframe")
+            logger.info(f"Found {len(iframes)} iframes on page")
+            
+            for i, iframe in enumerate(iframes):
+                try:
+                    self._driver.switch_to.frame(iframe)
+                    logger.info(f"Switched to iframe {i}")
+                    
+                    # Check if this iframe has login fields
+                    inputs = self._driver.find_elements(By.TAG_NAME, "input")
+                    if len(inputs) >= 2:
+                        logger.info(
+                            f"Iframe {i} has {len(inputs)} inputs - likely login"
+                        )
+                        return True
+                    
+                    # Switch back and try next iframe
+                    self._driver.switch_to.default_content()
+                except Exception as e:
+                    logger.debug(f"Could not switch to iframe {i}: {e}")
+                    self._driver.switch_to.default_content()
+            
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking iframes: {e}")
+            return False
+
     def _login(self, username: str, password: str) -> bool:
         """
         Perform CareLink login.
@@ -296,44 +377,84 @@ class CareLinkSyncService:
         Returns:
             True if login successful, False otherwise
         """
-        logger.info("Navigating to CareLink...")
-        self._driver.get(self.BASE_URL)
-        time.sleep(3)  # Let page fully load
+        # Go directly to login page (skip landing page)
+        login_url = f"{self.BASE_URL}/app/login"
+        logger.info(f"Navigating to CareLink login: {login_url}")
+        self._driver.get(login_url)
+        
+        # Wait for SPA to render
+        self._wait_for_angular_load(timeout=30)
         
         logger.info(f"Current URL: {self._driver.current_url}")
         logger.info(f"Page title: {self._driver.title}")
-        self._save_debug_screenshot("01_landing")
+        self._save_debug_screenshot("01_login_page")
         
         try:
-            # Step 1: Click "Sign In" link on landing page if present
-            sign_in_btn = self._find_element_multi(
-                self.SIGN_IN_LINK_SELECTORS,
-                by_type="xpath",
-                timeout=10,
-            )
+            # Check if login is in an iframe
+            in_iframe = self._check_for_iframes()
+            if in_iframe:
+                logger.info("Login form found in iframe")
             
-            if sign_in_btn:
-                logger.info("Found Sign In button, clicking...")
-                sign_in_btn.click()
-                time.sleep(3)
-                logger.info(f"After click URL: {self._driver.current_url}")
-                self._save_debug_screenshot("02_after_signin_click")
-            else:
-                logger.info("No Sign In button found, checking if already on login page")
-                self._save_debug_screenshot("02_no_signin_button")
+            # Wait additional time for dynamic form rendering
+            logger.info("Waiting for login form to render...")
+            time.sleep(5)
             
-            # Step 2: Find username field
+            # Log all input elements found
+            all_inputs = self._driver.find_elements(By.TAG_NAME, "input")
+            logger.info(f"Found {len(all_inputs)} input elements on page")
+            for inp in all_inputs[:5]:  # Log first 5
+                try:
+                    inp_type = inp.get_attribute("type")
+                    inp_name = inp.get_attribute("name")
+                    inp_id = inp.get_attribute("id")
+                    inp_placeholder = inp.get_attribute("placeholder")
+                    logger.info(
+                        f"  Input: type={inp_type}, name={inp_name}, "
+                        f"id={inp_id}, placeholder={inp_placeholder}"
+                    )
+                except Exception:
+                    pass
+            
+            self._save_debug_screenshot("02_after_wait")
+            
+            # Step 1: Find username field with extended selectors
             logger.info("Looking for username field...")
+            extended_username_selectors = self.USERNAME_SELECTORS + [
+                "input[type='email']",
+                "input[autocomplete='username']",
+                "input[autocomplete='email']",
+                "input:not([type='password']):not([type='hidden']):not([type='submit'])",
+            ]
+            
             username_field = self._find_element_multi(
-                self.USERNAME_SELECTORS,
+                extended_username_selectors,
                 by_type="css",
-                timeout=15,
+                timeout=20,
             )
+            
+            if not username_field:
+                # Try finding any visible text input
+                logger.warning("Standard selectors failed, trying to find any text input...")
+                try:
+                    inputs = self._driver.find_elements(By.CSS_SELECTOR, "input")
+                    for inp in inputs:
+                        inp_type = inp.get_attribute("type") or "text"
+                        skip_types = ["password", "hidden", "submit", "button"]
+                        if inp_type not in skip_types and inp.is_displayed():
+                            username_field = inp
+                            html_preview = inp.get_attribute("outerHTML")[:100]
+                            logger.info(f"Found fallback input: {html_preview}")
+                            break
+                except Exception as e:
+                    logger.error(f"Fallback search failed: {e}")
             
             if not username_field:
                 logger.error("Could not find username field!")
                 logger.error(f"Current URL: {self._driver.current_url}")
-                logger.error(f"Page source preview: {self._driver.page_source[:1000]}")
+                # Log full page source for debugging
+                page_source = self._driver.page_source
+                logger.error(f"Page source length: {len(page_source)}")
+                logger.error(f"Page source preview: {page_source[:2000]}")
                 self._save_debug_screenshot("03_no_username_field")
                 return False
             
