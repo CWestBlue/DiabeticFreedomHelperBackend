@@ -682,9 +682,41 @@ class CareLinkSyncService:
             date_picker.click()
             time.sleep(1)
             
-            # Date selection logic would go here
-            # This is simplified - actual implementation depends on the specific
-            # date picker UI used by CareLink
+            # TODO: Implement proper date selection based on CareLink UI
+            # For now, just click Apply to close the datepicker
+            
+            # Try to find and click Apply button
+            apply_selectors = [
+                "//button[contains(text(), 'Apply')]",
+                "//button[contains(text(), 'APPLY')]",
+                "//button[contains(@class, 'apply')]",
+                "//span[contains(text(), 'Apply')]/parent::button",
+            ]
+            
+            apply_btn = None
+            for selector in apply_selectors:
+                try:
+                    apply_btn = self._wait_for_element(
+                        By.XPATH,
+                        selector,
+                        timeout=3,
+                        clickable=True,
+                    )
+                    break
+                except TimeoutException:
+                    continue
+            
+            if apply_btn:
+                apply_btn.click()
+                logger.info("Clicked Apply button on date picker")
+                time.sleep(1)
+            else:
+                # No Apply button found, try pressing Escape to close
+                from selenium.webdriver.common.keys import Keys
+                body = self._driver.find_element(By.TAG_NAME, "body")
+                body.send_keys(Keys.ESCAPE)
+                logger.info("No Apply button found, sent Escape to close datepicker")
+                time.sleep(0.5)
             
             logger.info("Date range selection attempted")
             return True
