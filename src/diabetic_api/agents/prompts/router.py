@@ -12,10 +12,24 @@ Internal Workflows (quick reference)
 Label | What it runs | What it sees | When to pick it
 ----- | ------------ | ------------ | ---------------
 query (index 0) | MongoDB Query Generator only | user text + schema | User wants a fresh number/list straight from the DB—no interpretation.
-research_query (index 1) | Query → Research Agent | query results only | User needs interpretation **of the query output**; full dataset not needed.
-research_full_query (index 2) | Query → Research Agent | full dataset + query results | User needs interpretation that benefits from both the raw dataset and the query.
-research_full (index 3) | Research Agent only | full raw dataset (already loaded) | User needs analysis but no new query.
+research_query (index 1) | Query → Research Agent | query results only | **DEFAULT for most questions.** User needs interpretation of query output.
+research_full_query (index 2) | Query → Research Agent | full dataset + query results | **OPT-IN ONLY.** User explicitly requests full/comprehensive analysis.
+research_full (index 3) | Research Agent only | full raw dataset (already loaded) | **OPT-IN ONLY.** User explicitly requests full analysis, no new query needed.
 research (index 4) | Research Agent only | prior chat history only (no dataset, no query) | User is following up on numbers / facts we already gave.
+
+────────────────────────
+CRITICAL: Full Data Paths Are OPT-IN Only
+
+**NEVER** choose `research_full_query` (index 2) or `research_full` (index 3) unless the user's message contains an EXPLICIT trigger phrase such as:
+- "analyze my full history"
+- "look at all my data"
+- "comprehensive analysis"
+- "full dataset"
+- "complete history"
+- "all my readings"
+- "everything from the past X months"
+
+If no explicit trigger phrase is present, **always prefer** `research_query` (index 1) or `research` (index 4).
 
 ────────────────────────
 Decision Checklist
@@ -24,14 +38,14 @@ Decision Checklist
    (If the user just wants a number/list, answer "no".)  
 3. **query_results_useful** yes / no / n/a — Only relevant when both 1 & 2 are yes: will query results actually help Research?  
 4. **data_pass_strategy** query_only / full_data_and_query / n/a  
-   • `query_only`  → send just the query results  
-   • `full_data_and_query` → send the full dataset **and** the query results  
+   • `query_only`  → send just the query results (DEFAULT)
+   • `full_data_and_query` → send the full dataset **and** the query results (OPT-IN ONLY)
    • `n/a`     → nothing extra sent  
 5. **workflow** (choose one)  
    • `query`      → 1=yes, 2=no  
-   • `research_query`  → 1=yes, 2=yes, 4=query_only  
-   • `research_full_query`→ 1=yes, 2=yes, 4=full_data_and_query  
-   • `research_full`   → 1=no,  2=yes  
+   • `research_query`  → 1=yes, 2=yes, 4=query_only (DEFAULT)
+   • `research_full_query`→ 1=yes, 2=yes, 4=full_data_and_query (OPT-IN ONLY)
+   • `research_full`   → 1=no,  2=yes (OPT-IN ONLY)
    • `research`     → 1=no,  2=yes, answer can rely on previous chat history  
 6. **workflow_index** 0 | 1 | 2 | 3 | 4 (order above)
 

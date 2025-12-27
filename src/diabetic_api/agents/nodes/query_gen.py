@@ -44,6 +44,19 @@ class QueryGenAgent:
         self.llm = llm
         self.max_retries = max_retries
 
+    def _format_history(self, history: list, max_messages: int = 5) -> str:
+        """Format chat history for context."""
+        if not history:
+            return "(No previous messages)"
+        
+        formatted = []
+        for msg in history[-max_messages:]:
+            role = msg.get("role", "user").capitalize()
+            text = msg.get("text", "")[:250]  # Truncate long messages
+            formatted.append(f"{role}: {text}")
+        
+        return "\n".join(formatted)
+
     async def __call__(self, state: ChatState) -> dict:
         """
         Generate and execute MongoDB aggregation pipeline.
@@ -66,9 +79,18 @@ class QueryGenAgent:
             last_error=last_error if last_error else "None"
         )
         
+        # Include chat history for context (helps with follow-up queries)
+        history = state.get("history", [])
+        history_context = self._format_history(history)
+        
+        user_content = f"""Chat History:
+{history_context}
+
+Current User Message: {state["message"]}"""
+        
         messages = [
             SystemMessage(content=prompt),
-            HumanMessage(content=state["message"]),
+            HumanMessage(content=user_content),
         ]
 
         try:

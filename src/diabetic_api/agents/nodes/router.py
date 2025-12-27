@@ -131,7 +131,7 @@ Current User Message: {state['message']}"""
 
         return {"route_decision": route_decision}
 
-    def _format_history(self, history: list, max_messages: int = 6) -> str:
+    def _format_history(self, history: list, max_messages: int = 5) -> str:
         """Format chat history for context."""
         if not history:
             return "(No previous messages)"
@@ -139,7 +139,7 @@ Current User Message: {state['message']}"""
         formatted = []
         for msg in history[-max_messages:]:
             role = msg.get("role", "user").capitalize()
-            text = msg.get("text", "")[:300]  # Truncate long messages
+            text = msg.get("text", "")[:250]  # Truncate long messages
             formatted.append(f"{role}: {text}")
         
         return "\n".join(formatted)
