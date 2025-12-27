@@ -5,11 +5,6 @@ from operator import add
 
 from diabetic_api.db.unit_of_work import UnitOfWork
 
-# Forward reference to avoid circular import
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from diabetic_api.services.usage import UsageService
-
 
 class RouteDecision(TypedDict):
     """Router agent output."""
@@ -47,7 +42,8 @@ class ChatState(TypedDict, total=False):
     uow: UnitOfWork  # Unit of Work for database operations
 
     # Usage tracking (optional - for cost control)
-    usage_service: "UsageService | None"  # Usage service for tracking LLM calls
+    # Note: Using Any to avoid LangGraph runtime type resolution issues
+    usage_service: Any  # UsageService | None - for tracking LLM calls
 
     # Router output
     route_decision: RouteDecision | None
@@ -76,7 +72,7 @@ def create_initial_state(
     history: list[dict],
     uow: UnitOfWork,
     session_id: str = "",
-    usage_service: "UsageService | None" = None,
+    usage_service: Any = None,
 ) -> ChatState:
     """
     Create initial state for graph execution.
