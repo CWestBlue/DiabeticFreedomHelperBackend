@@ -54,3 +54,4 @@ async def get_sync_status(settings: SettingsDep) -> dict:
         } if settings.sync_schedule_enabled else None,
     }
 
+

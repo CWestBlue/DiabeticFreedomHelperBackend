@@ -76,11 +76,37 @@ class CareLinkSyncService:
     ELEMENT_WAIT_TIMEOUT = 20
     DOWNLOAD_WAIT_TIMEOUT = 60
     
-    # Selectors
-    SIGN_IN_BUTTON_XPATH = "//button[contains(text(), 'Sign In') or contains(text(), 'sign in')]"
-    USERNAME_SELECTOR = "input[name='username'], input[id='username'], input[type='text']"
-    PASSWORD_SELECTOR = "input[name='password'], input[id='password'], input[type='password']"
-    LOGIN_SUBMIT_XPATH = "//button[@type='submit' and contains(., 'Sign In')]"
+    # Selectors - Updated based on CareLink UI analysis
+    # Initial landing page "Sign In" link/button
+    SIGN_IN_LINK_SELECTORS = [
+        "//a[contains(text(), 'Sign In')]",
+        "//button[contains(text(), 'Sign In')]",
+        "//a[contains(@href, 'login')]",
+        "//span[contains(text(), 'Sign In')]/parent::*",
+    ]
+    # Login form fields
+    USERNAME_SELECTORS = [
+        "#username",
+        "input[name='username']",
+        "input[id='username']",
+        "input[placeholder*='username' i]",
+        "input[placeholder*='email' i]",
+        "input[type='text']:first-of-type",
+    ]
+    PASSWORD_SELECTORS = [
+        "#password",
+        "input[name='password']",
+        "input[id='password']",
+        "input[type='password']",
+    ]
+    # Submit button
+    LOGIN_SUBMIT_SELECTORS = [
+        "//button[@type='submit']",
+        "//button[contains(text(), 'Sign In')]",
+        "//input[@type='submit']",
+        "//button[contains(@class, 'submit')]",
+        "//button[contains(@class, 'login')]",
+    ]
     EXPORT_BUTTON_XPATH = "//*[contains(text(), 'Data Export') or contains(text(), 'CSV')]"
     LOADING_SPINNER_XPATH = "//div[contains(@class, 'spinner') or contains(@class, 'loading')]"
     
@@ -218,6 +244,47 @@ class CareLinkSyncService:
         
         return wait.until(condition)
     
+    def _find_element_multi(
+        self,
+        selectors: list[str],
+        by_type: str = "css",
+        timeout: int = 5,
+    ):
+        """
+        Try multiple selectors until one works.
+        
+        Args:
+            selectors: List of selectors to try
+            by_type: "css" or "xpath"
+            timeout: Timeout per selector
+            
+        Returns:
+            WebElement if found, None otherwise
+        """
+        by = By.CSS_SELECTOR if by_type == "css" else By.XPATH
+        
+        for selector in selectors:
+            try:
+                element = WebDriverWait(self._driver, timeout).until(
+                    EC.element_to_be_clickable((by, selector))
+                )
+                logger.debug(f"Found element with selector: {selector}")
+                return element
+            except TimeoutException:
+                continue
+        
+        return None
+
+    def _save_debug_screenshot(self, name: str) -> None:
+        """Save a screenshot for debugging."""
+        if self._download_dir:
+            try:
+                path = os.path.join(self._download_dir, f"debug_{name}.png")
+                self._driver.save_screenshot(path)
+                logger.info(f"Debug screenshot saved: {path}")
+            except Exception as e:
+                logger.warning(f"Could not save screenshot: {e}")
+
     def _login(self, username: str, password: str) -> bool:
         """
         Perform CareLink login.
@@ -229,53 +296,89 @@ class CareLinkSyncService:
         Returns:
             True if login successful, False otherwise
         """
-        logger.info("Navigating to CareLink login page...")
+        logger.info("Navigating to CareLink...")
         self._driver.get(self.BASE_URL)
+        time.sleep(3)  # Let page fully load
+        
+        logger.info(f"Current URL: {self._driver.current_url}")
+        logger.info(f"Page title: {self._driver.title}")
+        self._save_debug_screenshot("01_landing")
         
         try:
-            # Look for and click initial "Sign In" button on landing page
-            try:
-                sign_in_btn = self._wait_for_element(
-                    By.XPATH,
-                    self.SIGN_IN_BUTTON_XPATH,
-                    timeout=10,
-                    clickable=True,
-                )
+            # Step 1: Click "Sign In" link on landing page if present
+            sign_in_btn = self._find_element_multi(
+                self.SIGN_IN_LINK_SELECTORS,
+                by_type="xpath",
+                timeout=10,
+            )
+            
+            if sign_in_btn:
+                logger.info("Found Sign In button, clicking...")
                 sign_in_btn.click()
-                logger.info("Clicked initial Sign In button")
-                time.sleep(2)  # Wait for login form to load
-            except TimeoutException:
-                # May already be on login page
-                logger.info("No initial Sign In button, may already be on login form")
+                time.sleep(3)
+                logger.info(f"After click URL: {self._driver.current_url}")
+                self._save_debug_screenshot("02_after_signin_click")
+            else:
+                logger.info("No Sign In button found, checking if already on login page")
+                self._save_debug_screenshot("02_no_signin_button")
             
-            # Wait for username field
-            logger.info("Waiting for login form...")
-            username_field = self._wait_for_element(
-                By.CSS_SELECTOR,
-                self.USERNAME_SELECTOR,
-                clickable=True,
+            # Step 2: Find username field
+            logger.info("Looking for username field...")
+            username_field = self._find_element_multi(
+                self.USERNAME_SELECTORS,
+                by_type="css",
+                timeout=15,
             )
             
-            # Find password field
-            password_field = self._driver.find_element(
-                By.CSS_SELECTOR,
-                self.PASSWORD_SELECTOR,
+            if not username_field:
+                logger.error("Could not find username field!")
+                logger.error(f"Current URL: {self._driver.current_url}")
+                logger.error(f"Page source preview: {self._driver.page_source[:1000]}")
+                self._save_debug_screenshot("03_no_username_field")
+                return False
+            
+            logger.info("Found username field")
+            
+            # Step 3: Find password field
+            password_field = self._find_element_multi(
+                self.PASSWORD_SELECTORS,
+                by_type="css",
+                timeout=5,
             )
             
-            # Enter credentials
+            if not password_field:
+                logger.error("Could not find password field!")
+                self._save_debug_screenshot("04_no_password_field")
+                return False
+            
+            logger.info("Found password field")
+            
+            # Step 4: Enter credentials
             logger.info("Entering credentials...")
             username_field.clear()
             username_field.send_keys(username)
+            time.sleep(0.5)
             
             password_field.clear()
             password_field.send_keys(password)
+            time.sleep(0.5)
             
-            # Find and click submit button
-            submit_btn = self._wait_for_element(
-                By.XPATH,
-                self.LOGIN_SUBMIT_XPATH,
-                clickable=True,
+            self._save_debug_screenshot("05_credentials_entered")
+            
+            # Step 5: Find and click submit button
+            logger.info("Looking for submit button...")
+            submit_btn = self._find_element_multi(
+                self.LOGIN_SUBMIT_SELECTORS,
+                by_type="xpath",
+                timeout=10,
             )
+            
+            if not submit_btn:
+                logger.error("Could not find submit button!")
+                self._save_debug_screenshot("06_no_submit_button")
+                return False
+            
+            logger.info("Clicking submit button...")
             submit_btn.click()
             
             logger.info("Submitted login form, waiting for redirect...")
