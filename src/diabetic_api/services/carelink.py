@@ -425,20 +425,33 @@ class CareLinkSyncService:
         try:
             # Step 0: Click "Sign in" button on landing page
             logger.info("Looking for 'Sign in' button on landing page...")
-            sign_in_selectors = [
-                "//button[text()='Sign in']",
-                "//a[text()='Sign in']",
-                "//button[contains(text(), 'Sign in')]",
-                "//a[contains(text(), 'Sign in')]",
-                "//button[contains(@class, 'sign')]",
-                "//a[contains(@href, 'login')]",
+            
+            # Try CSS selectors first (more reliable for this page)
+            sign_in_css_selectors = [
+                "#landing-login-button-id",  # Exact ID from DevTools
+                "[data-qa='landing-login-button']",  # Data attribute
+                "button[id*='login']",
+                "button.mat-primary",
             ]
             
             sign_in_btn = self._find_element_multi(
-                sign_in_selectors,
-                by_type="xpath",
+                sign_in_css_selectors,
+                by_type="css",
                 timeout=10,
             )
+            
+            # Fallback to XPath if CSS didn't work
+            if not sign_in_btn:
+                sign_in_xpath_selectors = [
+                    "//button[.//span[contains(text(), 'Sign in')]]",
+                    "//button[contains(@id, 'login')]",
+                    "//button[contains(@data-qa, 'login')]",
+                ]
+                sign_in_btn = self._find_element_multi(
+                    sign_in_xpath_selectors,
+                    by_type="xpath",
+                    timeout=5,
+                )
             
             if sign_in_btn:
                 logger.info("Found 'Sign in' button, clicking...")
