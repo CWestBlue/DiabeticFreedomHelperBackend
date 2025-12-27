@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     langchain_project: str = "DiabeticAIChat"  # Project name in LangSmith
     langchain_endpoint: str = "https://api.smith.langchain.com"  # LangSmith API endpoint
 
+    # CareLink Sync Configuration
+    carelink_username: str = ""
+    carelink_password: str = ""
+    carelink_country_code: str = "us"
+    carelink_headless: bool = True  # Set to False to see browser window for debugging
+    sync_schedule_enabled: bool = False  # Enable weekly auto-sync
+    sync_schedule_day: int = 0  # 0=Monday, 6=Sunday
+    sync_schedule_hour: int = 6  # Hour in 24h format (0-23)
+
     # App
     debug: bool = False
     app_name: str = "Diabetic AI API"
@@ -66,6 +75,11 @@ class Settings(BaseSettings):
         elif self.llm_provider == LLMProvider.GEMINI:
             return bool(self.google_api_key)
         return False
+
+    @property
+    def is_carelink_configured(self) -> bool:
+        """Check if CareLink credentials are configured."""
+        return bool(self.carelink_username and self.carelink_password)
 
 
 @lru_cache

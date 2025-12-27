@@ -17,6 +17,10 @@ dependencies = [
     "sse-starlette>=2.1.0",
     "python-multipart>=0.0.12",
     "tzdata>=2024.1",
+    # CareLink sync dependencies
+    "selenium>=4.27.0",
+    "webdriver-manager>=4.0.0",
+    "apscheduler>=3.10.0",
 ]
 
 [project.optional-dependencies]

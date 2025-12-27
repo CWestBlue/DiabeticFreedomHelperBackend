@@ -1,17 +1,20 @@
 """Business logic services."""
 
+from .carelink import CareLinkSyncService, SyncResult
 from .chat import ChatService
 from .dashboard import DashboardService
-from .upload import UploadService
 from .full_data import FullDataService
-from .usage import UsageService, UsageLimitExceeded
+from .upload import UploadService
+from .usage import UsageLimitExceeded, UsageService
 
 __all__ = [
+    "CareLinkSyncService",
     "ChatService",
     "DashboardService",
-    "UploadService",
     "FullDataService",
-    "UsageService",
+    "SyncResult",
+    "UploadService",
     "UsageLimitExceeded",
+    "UsageService",
 ]
 
