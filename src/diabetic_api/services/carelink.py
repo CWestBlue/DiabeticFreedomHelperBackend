@@ -703,6 +703,26 @@ class CareLinkSyncService:
         logger.info("Looking for Data Export (CSV) button...")
         
         try:
+            # First, dismiss any open datepicker/overlay by pressing Escape or clicking body
+            try:
+                # Wait for any datepicker backdrop to disappear
+                backdrop_selector = "div.cdk-overlay-backdrop"
+                WebDriverWait(self._driver, 3).until(
+                    EC.invisibility_of_element_located((By.CSS_SELECTOR, backdrop_selector))
+                )
+                logger.info("Datepicker overlay dismissed")
+            except TimeoutException:
+                # Backdrop may still be present, try clicking body to dismiss
+                try:
+                    body = self._driver.find_element(By.TAG_NAME, "body")
+                    # Press Escape key to close any open dialogs
+                    from selenium.webdriver.common.keys import Keys
+                    body.send_keys(Keys.ESCAPE)
+                    time.sleep(0.5)
+                    logger.info("Sent Escape key to dismiss overlay")
+                except Exception:
+                    pass
+            
             # Find and click export button
             export_selectors = [
                 "//*[contains(text(), 'Data Export (CSV)')]",
@@ -728,9 +748,9 @@ class CareLinkSyncService:
                 logger.error("Could not find export button")
                 return None
             
-            # Click export
-            logger.info("Clicking export button...")
-            export_btn.click()
+            # Click export using JavaScript to bypass any overlay issues
+            logger.info("Clicking export button via JavaScript...")
+            self._driver.execute_script("arguments[0].click();", export_btn)
             
             # Wait for loading spinner to appear and disappear
             try:
