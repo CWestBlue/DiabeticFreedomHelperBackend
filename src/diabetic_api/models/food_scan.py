@@ -330,6 +330,141 @@ class FoodScanError(BaseModel):
 
 
 # =============================================================================
+# FoodScan (for food_scans collection - MVP-2.2)
+# =============================================================================
+
+
+class ArtifactType(str, Enum):
+    """Types of scan artifacts."""
+
+    RGB = "rgb"  # RGB camera image
+    DEPTH_U16 = "depth_u16"  # 16-bit depth map
+    CONFIDENCE_U8 = "confidence_u8"  # 8-bit confidence map
+    SEGMENTATION_MASK = "segmentation_mask"  # Food segmentation mask
+
+
+class FoodScan(BaseModel):
+    """
+    Scan metadata and results record.
+    
+    Stored in `food_scans` collection (separate from `pump_data`).
+    This stores the scan request metadata and processing results.
+    """
+
+    # Identity
+    id: str | None = Field(None, description="MongoDB document ID")
+    scan_id: str = Field(..., description="Unique scan identifier")
+    user_id: str = Field(..., description="User identifier")
+
+    # Device info
+    device: DeviceInfo = Field(..., description="Device information")
+    intrinsics: CameraIntrinsics = Field(..., description="Camera intrinsics")
+    orientation: DeviceOrientation | None = Field(None, description="Device orientation")
+
+    # Scan results
+    food_candidates: list["FoodCandidate"] = Field(
+        default_factory=list, description="Food identification candidates"
+    )
+    selected_food: "FoodCandidate | None" = Field(None, description="Selected food")
+    volume_ml: float | None = Field(None, description="Estimated volume in ml")
+    grams_est: float | None = Field(None, description="Estimated weight in grams")
+    macros: "Macros | None" = Field(None, description="Estimated macros")
+    macro_ranges: "MacroRanges | None" = Field(None, description="Macro confidence ranges")
+    confidence_score: float | None = Field(None, ge=0, le=1, description="Overall confidence")
+    scan_quality: ScanQuality | None = Field(None, description="Scan quality indicator")
+    uncertainty_reasons: list[UncertaintyReason] = Field(
+        default_factory=list, description="Uncertainty reasons"
+    )
+
+    # Processing metadata
+    processing_time_ms: int | None = Field(None, description="Server processing time")
+    scan_version: str = Field(default="1.0", description="API contract version")
+    opt_in_store_artifacts: bool = Field(
+        default=False, description="User opted in to store artifacts"
+    )
+
+    # Timestamps
+    created_at: datetime = Field(..., description="Scan timestamp")
+    processed_at: datetime | None = Field(None, description="Processing completion time")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "fs_abc123",
+                "scan_id": "scan_20260115123005_a1b2c3d4",
+                "user_id": "user_123",
+                "device": {
+                    "platform": "android",
+                    "model": "Pixel 9",
+                    "os_version": "15",
+                    "depth_sensor": "arcore_raw",
+                },
+                "intrinsics": {
+                    "fx": 1000.0,
+                    "fy": 1000.0,
+                    "cx": 540.0,
+                    "cy": 960.0,
+                    "width": 1080,
+                    "height": 1920,
+                },
+                "confidence_score": 0.82,
+                "scan_quality": "good",
+                "processing_time_ms": 1250,
+                "opt_in_store_artifacts": False,
+                "created_at": "2026-01-15T12:30:00Z",
+                "processed_at": "2026-01-15T12:30:05Z",
+            }
+        }
+
+
+class ScanArtifact(BaseModel):
+    """
+    Scan artifact (image/depth data) for debugging and analytics.
+    
+    Stored in `scan_artifacts` collection with TTL expiration.
+    Only created when user opts in via `opt_in_store_artifacts=true`.
+    """
+
+    # Identity
+    id: str | None = Field(None, description="MongoDB document ID")
+    scan_id: str = Field(..., description="Reference to parent scan")
+    artifact_type: ArtifactType = Field(..., description="Type of artifact")
+
+    # Storage
+    storage_uri: str = Field(..., description="GridFS or blob storage URI")
+    size_bytes: int = Field(..., description="Artifact size in bytes")
+    content_type: str = Field(..., description="MIME type (image/jpeg, image/png)")
+
+    # Metadata
+    width: int | None = Field(None, description="Image width")
+    height: int | None = Field(None, description="Image height")
+    bit_depth: int | None = Field(None, description="Bit depth (for depth maps)")
+
+    # TTL
+    created_at: datetime = Field(..., description="Upload timestamp")
+    ttl_expires_at: datetime = Field(
+        ..., description="TTL expiration (default 7 days from creation)"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "art_xyz789",
+                "scan_id": "scan_20260115123005_a1b2c3d4",
+                "artifact_type": "rgb",
+                "storage_uri": "gridfs://scan_artifacts/art_xyz789",
+                "size_bytes": 1234567,
+                "content_type": "image/jpeg",
+                "width": 1080,
+                "height": 1920,
+                "bit_depth": None,
+                "created_at": "2026-01-15T12:30:00Z",
+                "ttl_expires_at": "2026-01-22T12:30:00Z",
+            }
+        }
+
+
+# =============================================================================
 # MealEstimate (for storage/timeline integration)
 # =============================================================================
 

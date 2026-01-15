@@ -4,8 +4,10 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from .repositories.food_scans import FoodScanRepository
 from .repositories.meal_estimates import MealEstimateRepository
 from .repositories.pump_data import PumpDataRepository
+from .repositories.scan_artifacts import ScanArtifactRepository
 from .repositories.sessions import SessionRepository
 
 
@@ -33,6 +35,8 @@ class UnitOfWork:
         self._pump_data: PumpDataRepository | None = None
         self._sessions: SessionRepository | None = None
         self._meal_estimates: MealEstimateRepository | None = None
+        self._food_scans: FoodScanRepository | None = None
+        self._scan_artifacts: ScanArtifactRepository | None = None
 
     @property
     def pump_data(self) -> PumpDataRepository:
@@ -73,6 +77,35 @@ class UnitOfWork:
         if self._meal_estimates is None:
             self._meal_estimates = MealEstimateRepository(self._db["meal_estimates"])
         return self._meal_estimates
+
+    @property
+    def food_scans(self) -> FoodScanRepository:
+        """
+        Get FoodScan repository (lazy loaded).
+        
+        Uses 'food_scans' collection for scan metadata and results.
+        
+        Returns:
+            FoodScanRepository instance
+        """
+        if self._food_scans is None:
+            self._food_scans = FoodScanRepository(self._db["food_scans"])
+        return self._food_scans
+
+    @property
+    def scan_artifacts(self) -> ScanArtifactRepository:
+        """
+        Get ScanArtifact repository (lazy loaded).
+        
+        Uses 'scan_artifacts' collection with TTL for images/depth data.
+        Only populated when user opts in.
+        
+        Returns:
+            ScanArtifactRepository instance
+        """
+        if self._scan_artifacts is None:
+            self._scan_artifacts = ScanArtifactRepository(self._db["scan_artifacts"])
+        return self._scan_artifacts
 
     async def run_aggregation(
         self,

@@ -14,6 +14,7 @@ from .session import ChatSession, ChatSessionDetail, SessionCreate, SessionListR
 from .pump_data import PumpDataRecord, UploadResult, QueryResult
 from .food_scan import (
     # Enums
+    ArtifactType,
     ScanSource,
     UncertaintyReason,
     ScanQuality,
@@ -31,7 +32,9 @@ from .food_scan import (
     DebugInfo,
     FoodScanResponse,
     FoodScanError,
-    # Storage models
+    # Storage models (MVP-2.2)
+    FoodScan,
+    ScanArtifact,
     UserOverrides,
     MealEstimate,
 )
@@ -60,6 +63,7 @@ __all__ = [
     "UploadResult",
     "QueryResult",
     # Food Scan (Meal Vision)
+    "ArtifactType",
     "ScanSource",
     "UncertaintyReason",
     "ScanQuality",
@@ -75,6 +79,8 @@ __all__ = [
     "DebugInfo",
     "FoodScanResponse",
     "FoodScanError",
+    "FoodScan",
+    "ScanArtifact",
     "UserOverrides",
     "MealEstimate",
 ]
