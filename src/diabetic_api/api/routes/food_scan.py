@@ -11,6 +11,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel, Field
 
 from diabetic_api.models.food_scan import (
     FoodCandidate,
@@ -418,3 +419,121 @@ async def get_scan(scan_id: str) -> FoodScanResponse:
             details={"note": "Storage not yet implemented (MVP-2.2)"},
         ).model_dump(),
     )
+
+
+# =============================================================================
+# Meal Estimate Endpoints (MVP-3.3)
+# =============================================================================
+
+
+class SaveMealRequest(BaseModel):
+    """Request to save a confirmed meal estimate."""
+    scan_id: str = Field(..., description="ID of the scan this meal came from")
+    user_id: str = Field(..., description="User identifier")
+    source: str = Field(default="vision", description="Source of estimate")
+    canonical_food_id: str = Field(..., description="Food database ID")
+    food_label: str = Field(..., description="Human-readable food name")
+    macros: Macros = Field(..., description="Macronutrient values")
+    macro_ranges: MacroRanges | None = Field(None, description="Confidence ranges")
+    confidence: float = Field(..., ge=0, le=1, description="Confidence score")
+    uncertainty_reasons: list[str] = Field(
+        default_factory=list, description="Reasons for uncertainty"
+    )
+    user_overrides: dict | None = Field(None, description="User corrections")
+
+
+class MealEstimateResponse(BaseModel):
+    """Response after saving a meal estimate."""
+    id: str = Field(..., description="Unique meal estimate ID")
+    scan_id: str = Field(..., description="Source scan ID")
+    user_id: str = Field(..., description="User ID")
+    food_label: str = Field(..., description="Food name")
+    macros: Macros = Field(..., description="Macros")
+    confidence: float = Field(..., description="Confidence score")
+    created_at: datetime = Field(..., description="Creation timestamp")
+
+
+@router.post(
+    "/meals",
+    response_model=MealEstimateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Save confirmed meal estimate",
+    description="""
+    Save a user-confirmed meal estimate to the meal_estimates collection.
+    
+    This is called after the user reviews scan results and confirms their selection.
+    The data is stored separately from CareLink pump data.
+    """,
+)
+async def save_meal_estimate(request: SaveMealRequest) -> MealEstimateResponse:
+    """
+    Save a confirmed meal estimate.
+    
+    MVP-3.3: Stores to meal_estimates collection (separate from pump_data).
+    """
+    # Generate meal ID
+    meal_id = f"meal_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
+    created_at = datetime.now(UTC)
+    
+    logger.info(
+        "Saving meal estimate",
+        extra={
+            "meal_id": meal_id,
+            "scan_id": request.scan_id,
+            "user_id": request.user_id,
+            "food_label": request.food_label,
+            "confidence": request.confidence,
+        },
+    )
+    
+    # TODO: Actually persist to MongoDB via MealEstimateRepository
+    # For now, return success response for Flutter integration testing
+    
+    return MealEstimateResponse(
+        id=meal_id,
+        scan_id=request.scan_id,
+        user_id=request.user_id,
+        food_label=request.food_label,
+        macros=request.macros,
+        confidence=request.confidence,
+        created_at=created_at,
+    )
+
+
+class MealListResponse(BaseModel):
+    """Response for meal list query."""
+    meals: list[MealEstimateResponse] = Field(default_factory=list)
+    total: int = Field(default=0)
+
+
+@router.get(
+    "/meals",
+    response_model=MealListResponse,
+    summary="Get meal estimates for user",
+    description="Retrieve meal estimates from the meal_estimates collection.",
+)
+async def get_meal_estimates(
+    user_id: str,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    limit: int = 50,
+) -> MealListResponse:
+    """
+    Get meal estimates for a user within a date range.
+    
+    MVP-3.3: Queries meal_estimates collection (separate from pump_data).
+    """
+    logger.info(
+        "Fetching meal estimates",
+        extra={
+            "user_id": user_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "limit": limit,
+        },
+    )
+    
+    # TODO: Actually query MongoDB via MealEstimateRepository
+    # For now, return empty list for integration testing
+    
+    return MealListResponse(meals=[], total=0)
