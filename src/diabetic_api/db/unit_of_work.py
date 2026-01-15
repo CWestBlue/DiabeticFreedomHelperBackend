@@ -4,6 +4,7 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from .repositories.meal_estimates import MealEstimateRepository
 from .repositories.pump_data import PumpDataRepository
 from .repositories.sessions import SessionRepository
 
@@ -31,6 +32,7 @@ class UnitOfWork:
         self._db = db
         self._pump_data: PumpDataRepository | None = None
         self._sessions: SessionRepository | None = None
+        self._meal_estimates: MealEstimateRepository | None = None
 
     @property
     def pump_data(self) -> PumpDataRepository:
@@ -57,6 +59,20 @@ class UnitOfWork:
         if self._sessions is None:
             self._sessions = SessionRepository(self._db["ChatHistory"])
         return self._sessions
+
+    @property
+    def meal_estimates(self) -> MealEstimateRepository:
+        """
+        Get MealEstimate repository (lazy loaded).
+        
+        Uses 'meal_estimates' collection (separate from pump_data).
+        
+        Returns:
+            MealEstimateRepository instance
+        """
+        if self._meal_estimates is None:
+            self._meal_estimates = MealEstimateRepository(self._db["meal_estimates"])
+        return self._meal_estimates
 
     async def run_aggregation(
         self,
