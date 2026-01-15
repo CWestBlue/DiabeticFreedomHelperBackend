@@ -12,6 +12,32 @@ from .dashboard import (
 )
 from .session import ChatSession, ChatSessionDetail, SessionCreate, SessionListResponse
 from .pump_data import PumpDataRecord, UploadResult, QueryResult
+from .food_scan import (
+    # Enums
+    ArtifactType,
+    ScanSource,
+    UncertaintyReason,
+    ScanQuality,
+    ScanErrorCode,
+    # Request models
+    CameraIntrinsics,
+    DeviceOrientation,
+    DeviceInfo,
+    FoodScanRequest,
+    # Response models
+    Macros,
+    MacroRanges,
+    FoodCandidate,
+    VolumeEstimate,
+    DebugInfo,
+    FoodScanResponse,
+    FoodScanError,
+    # Storage models (MVP-2.2)
+    FoodScan,
+    ScanArtifact,
+    UserOverrides,
+    MealEstimate,
+)
 
 __all__ = [
     # Chat
@@ -36,5 +62,26 @@ __all__ = [
     "PumpDataRecord",
     "UploadResult",
     "QueryResult",
+    # Food Scan (Meal Vision)
+    "ArtifactType",
+    "ScanSource",
+    "UncertaintyReason",
+    "ScanQuality",
+    "ScanErrorCode",
+    "CameraIntrinsics",
+    "DeviceOrientation",
+    "DeviceInfo",
+    "FoodScanRequest",
+    "Macros",
+    "MacroRanges",
+    "FoodCandidate",
+    "VolumeEstimate",
+    "DebugInfo",
+    "FoodScanResponse",
+    "FoodScanError",
+    "FoodScan",
+    "ScanArtifact",
+    "UserOverrides",
+    "MealEstimate",
 ]
 
