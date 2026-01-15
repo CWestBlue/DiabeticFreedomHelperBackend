@@ -148,6 +148,43 @@ backend/
 | GET | `/sessions/{id}` | Get session with messages |
 | GET | `/dashboard` | Get dashboard metrics |
 | POST | `/upload` | Upload CSV data file |
+| POST | `/food/scan` | Scan food image for nutritional analysis |
+
+## Meal Vision (Food Scan Feature)
+
+AI-powered food recognition and nutritional estimation using RGB + depth camera data.
+
+### MVP Scope Constraints
+
+> **Important:** The MVP version has specific environmental constraints. Scans outside these parameters will be rejected or produce unreliable results.
+
+#### Supported Scenarios (MVP)
+
+| Scenario | Status | Notes |
+|----------|--------|-------|
+| Food on plate/table | Supported | Table surface must be visible |
+| Plate fully in frame | Supported | Partial plates rejected |
+| Single-frame capture | Supported | Multi-frame fusion is V2 |
+
+#### Explicitly NOT Supported (MVP)
+
+| Scenario | Status | Future Version |
+|----------|--------|----------------|
+| Handheld foods | Not supported | V2 |
+| Bowls held in air | Not supported | V2 |
+| No-table scans | Not supported | V2 |
+| Multi-item plates | Limited | Returns primary item only |
+| Mixed dishes (casseroles, stir-fry) | Limited | Lower confidence, single estimate |
+
+#### Why These Constraints?
+
+- **Table plane detection** is required for accurate volume estimation
+- Depth sensors need a reference surface for scale calibration
+- These constraints ensure >80% accuracy on supported scenarios vs <50% without them
+
+#### API Documentation
+
+See [`docs/food_scan_api_contract.md`](docs/food_scan_api_contract.md) for the complete API specification.
 
 ## Architecture
 
