@@ -20,6 +20,8 @@ dependencies = [
     # CareLink sync dependencies
     "selenium>=4.27.0",
     "webdriver-manager>=4.0.0",
+    "undetected-chromedriver>=3.5.0",
+    "setuptools>=69.0.0",  # Provides distutils for Python 3.12+
     "apscheduler>=3.10.0",
 ]
 

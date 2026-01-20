@@ -1,10 +1,10 @@
 """CareLink sync service for automated data retrieval.
 
-This service automates the process of:
-1. Logging into Medtronic CareLink
-2. Selecting date range (from last upload to now)
-3. Downloading CSV export
-4. Processing via existing UploadService
+This service supports two authentication methods:
+1. Token-based API (recommended) - Uses a pre-authenticated token to call REST APIs directly
+2. Selenium scraping (legacy) - Automates browser login and CSV download
+
+Token-based is preferred as it bypasses reCAPTCHA and is more reliable.
 """
 
 import asyncio
@@ -16,16 +16,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from selenium import webdriver
+import undetected_chromedriver as uc
 from selenium.common.exceptions import TimeoutException, WebDriverException
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from diabetic_api.core.config import Settings, get_settings
 from diabetic_api.db.unit_of_work import UnitOfWork
+from diabetic_api.services.carelink_api import CareLinkApiClient
 from diabetic_api.services.upload import UploadService
 
 logger = logging.getLogger(__name__)
@@ -127,20 +126,22 @@ class CareLinkSyncService:
         self.uow = uow
         self.upload_service = upload_service or UploadService(uow)
         self.settings = settings or get_settings()
-        self._driver: webdriver.Chrome | None = None
+        self._driver: uc.Chrome | None = None
         self._download_dir: str | None = None
     
-    def _create_driver(self) -> webdriver.Chrome:
+    def _create_driver(self) -> uc.Chrome:
         """
-        Create and configure Chrome WebDriver for headless operation.
+        Create and configure undetected Chrome WebDriver.
+        
+        Uses undetected-chromedriver to bypass bot detection and reCAPTCHA.
         
         Returns:
-            Configured Chrome WebDriver instance
+            Configured undetected Chrome WebDriver instance
         """
         # Create temp directory for downloads
         self._download_dir = tempfile.mkdtemp(prefix="carelink_")
         
-        options = ChromeOptions()
+        options = uc.ChromeOptions()
         
         # Use system Chrome/Chromium if specified
         chrome_bin = os.environ.get("CHROME_BIN")
@@ -148,12 +149,14 @@ class CareLinkSyncService:
             options.binary_location = chrome_bin
         
         # Headless mode - can be disabled for debugging via CARELINK_HEADLESS=false in .env
-        if self.settings.carelink_headless:
-            options.add_argument("--headless=new")
+        # Note: undetected-chromedriver has better headless support
+        headless = self.settings.carelink_headless
+        if headless:
             logger.info("Running in HEADLESS mode")
         else:
             logger.info("Running in VISIBLE mode (browser window will open)")
         
+        # Basic options for stability
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
@@ -161,23 +164,7 @@ class CareLinkSyncService:
         # Set window size (important for button positioning)
         options.add_argument("--window-size=1920,1080")
         
-        # Anti-detection measures
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        
-        # Set realistic user agent
-        user_agent = (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
-        options.add_argument(f"--user-agent={user_agent}")
-        
-        # Additional settings to appear more like real browser
-        options.add_argument("--disable-infobars")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--enable-javascript")
+        # Language settings
         options.add_argument("--lang=en-US,en")
         
         # Configure downloads
@@ -189,27 +176,22 @@ class CareLinkSyncService:
         }
         options.add_experimental_option("prefs", prefs)
         
-        # Try to use system chromium-driver first, fall back to webdriver-manager
+        # Create undetected Chrome driver
+        # undetected-chromedriver handles:
+        # - Automatic chromedriver download/patching
+        # - Anti-detection measures
+        # - Realistic browser fingerprinting
         try:
-            # Check for environment variable (set in Docker)
-            chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
-            if chromedriver_path and os.path.exists(chromedriver_path):
-                service = ChromeService(executable_path=chromedriver_path)
-            # Check for system chromedriver
-            elif os.path.exists("/usr/bin/chromedriver"):
-                service = ChromeService(executable_path="/usr/bin/chromedriver")
-            elif os.path.exists("/usr/local/bin/chromedriver"):
-                service = ChromeService(executable_path="/usr/local/bin/chromedriver")
-            else:
-                # Use webdriver-manager to auto-download
-                from webdriver_manager.chrome import ChromeDriverManager
-                service = ChromeService(ChromeDriverManager().install())
+            driver = uc.Chrome(
+                options=options,
+                headless=headless,
+                use_subprocess=True,  # Better stability
+            )
+            driver.set_page_load_timeout(self.PAGE_LOAD_TIMEOUT)
+            logger.info("Undetected Chrome driver created successfully")
         except Exception as e:
-            logger.warning(f"ChromeDriver setup issue: {e}, trying default")
-            service = ChromeService()
-        
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.set_page_load_timeout(self.PAGE_LOAD_TIMEOUT)
+            logger.error(f"Failed to create undetected Chrome driver: {e}")
+            raise
         
         return driver
     
@@ -825,14 +807,10 @@ class CareLinkSyncService:
     
     async def sync(self) -> SyncResult:
         """
-        Perform full CareLink sync operation.
+        Perform CareLink sync operation.
         
-        This is the main entry point that orchestrates:
-        1. Login to CareLink
-        2. Navigate to reports
-        3. Set date range (from last upload to now)
-        4. Download CSV export
-        5. Process via UploadService
+        Uses token-based API if configured (recommended), otherwise falls back
+        to Selenium-based scraping (legacy).
         
         Returns:
             SyncResult with operation status and details
@@ -843,11 +821,166 @@ class CareLinkSyncService:
         if not self.settings.is_carelink_configured:
             return SyncResult(
                 success=False,
-                message="CareLink credentials not configured",
+                message="CareLink not configured",
                 sync_started_at=sync_started,
                 sync_completed_at=datetime.now(UTC),
-                error="Set CARELINK_USERNAME and CARELINK_PASSWORD environment variables",
+                error="Set CARELINK_TOKEN (recommended) or CARELINK_USERNAME/PASSWORD",
             )
+        
+        # Use token-based API if configured (recommended)
+        if self.settings.carelink_use_token_auth:
+            return await self._sync_with_token(sync_started)
+        
+        # Fall back to legacy Selenium-based sync
+        return await self._sync_with_selenium(sync_started)
+    
+    async def _sync_with_token(self, sync_started: datetime) -> SyncResult:
+        """
+        Sync using token-based REST API (recommended method).
+        
+        This method calls the CareLink API directly using a pre-authenticated
+        token, bypassing the web login flow and reCAPTCHA.
+        """
+        logger.info("Starting CareLink sync using token-based API...")
+        
+        try:
+            # Create API client
+            client = CareLinkApiClient(
+                token=self.settings.carelink_token,
+                country_code=self.settings.carelink_country_code,
+                patient_username=self.settings.carelink_patient_username or None,
+            )
+            
+            # Initialize (validates token and gets session data)
+            loop = asyncio.get_event_loop()
+            initialized = await loop.run_in_executor(None, client.initialize)
+            
+            if not initialized:
+                return SyncResult(
+                    success=False,
+                    message="Failed to initialize CareLink API client",
+                    sync_started_at=sync_started,
+                    sync_completed_at=datetime.now(UTC),
+                    error=client.last_error or "Token may be expired - get a new one from browser",
+                )
+            
+            # Get recent data
+            data = await loop.run_in_executor(None, client.get_recent_data)
+            
+            if not data:
+                return SyncResult(
+                    success=False,
+                    message="Failed to retrieve data from CareLink API",
+                    sync_started_at=sync_started,
+                    sync_completed_at=datetime.now(UTC),
+                    error=client.last_error or "Check logs for details",
+                )
+            
+            # Convert to pump records
+            records = data.to_pump_records()
+            logger.info(f"Retrieved {len(records)} records from CareLink API")
+            
+            if not records:
+                return SyncResult(
+                    success=True,
+                    message="No new data from CareLink",
+                    records_imported=0,
+                    sync_started_at=sync_started,
+                    sync_completed_at=datetime.now(UTC),
+                )
+            
+            # Insert records into database (with deduplication)
+            inserted_count = await self._insert_pump_records(records)
+            
+            return SyncResult(
+                success=True,
+                message=f"Successfully synced {inserted_count} records from CareLink API",
+                records_imported=inserted_count,
+                sync_started_at=sync_started,
+                sync_completed_at=datetime.now(UTC),
+            )
+            
+        except Exception as e:
+            logger.exception("Token-based sync failed")
+            return SyncResult(
+                success=False,
+                message="Token-based sync failed",
+                sync_started_at=sync_started,
+                sync_completed_at=datetime.now(UTC),
+                error=str(e),
+            )
+    
+    async def _insert_pump_records(self, records: list[dict]) -> int:
+        """
+        Insert pump records into database with deduplication.
+        
+        Deduplication checks for existing records with the same timestamp
+        AND at least one matching data field (to avoid false duplicates from
+        different record types at the same time).
+        
+        Args:
+            records: List of pump data records
+            
+        Returns:
+            Number of records actually inserted (excludes duplicates)
+        """
+        if not records:
+            return 0
+        
+        inserted = 0
+        skipped_duplicates = 0
+        
+        for record in records:
+            try:
+                timestamp = record.get("Timestamp")
+                if not timestamp:
+                    continue
+                
+                # Build a more specific query for deduplication
+                # Check timestamp AND at least one data field to avoid
+                # treating different event types at same time as duplicates
+                query = {"Timestamp": timestamp}
+                
+                # Add type-specific field to query for better matching
+                if record.get("Sensor Glucose (mg/dL)") is not None:
+                    query["Sensor Glucose (mg/dL)"] = record["Sensor Glucose (mg/dL)"]
+                elif record.get("Bolus Volume Delivered (U)") is not None:
+                    query["Bolus Volume Delivered (U)"] = record["Bolus Volume Delivered (U)"]
+                elif record.get("BWZ Carb Input (grams)") is not None:
+                    query["BWZ Carb Input (grams)"] = record["BWZ Carb Input (grams)"]
+                elif record.get("BG Reading (mg/dL)") is not None:
+                    query["BG Reading (mg/dL)"] = record["BG Reading (mg/dL)"]
+                elif record.get("Basal Rate (U/h)") is not None:
+                    query["Basal Rate (U/h)"] = record["Basal Rate (U/h)"]
+                
+                # Check for existing record
+                existing = await self.uow.pump_data.find_one(query)
+                if existing:
+                    skipped_duplicates += 1
+                    continue
+                
+                # Insert record
+                await self.uow.pump_data.insert_one(record)
+                inserted += 1
+                
+            except Exception as e:
+                logger.warning(f"Error inserting record: {e}")
+                continue
+        
+        logger.info(
+            f"Inserted {inserted} of {len(records)} records "
+            f"({skipped_duplicates} duplicates skipped)"
+        )
+        return inserted
+    
+    async def _sync_with_selenium(self, sync_started: datetime) -> SyncResult:
+        """
+        Legacy sync using Selenium browser automation.
+        
+        This method automates the browser to log in and download CSV exports.
+        May be blocked by reCAPTCHA.
+        """
+        logger.info("Starting CareLink sync using Selenium (legacy)...")
         
         try:
             # Get date range
@@ -878,7 +1011,7 @@ class CareLinkSyncService:
                     message="Failed to download CSV from CareLink",
                     sync_started_at=sync_started,
                     sync_completed_at=datetime.now(UTC),
-                    error="Check logs for details",
+                    error="Check logs for details. Consider using token-based auth instead.",
                 )
             
             # Read CSV content
@@ -911,10 +1044,10 @@ class CareLinkSyncService:
                 )
                 
         except Exception as e:
-            logger.exception("Sync failed with exception")
+            logger.exception("Selenium sync failed with exception")
             return SyncResult(
                 success=False,
-                message="Sync failed with unexpected error",
+                message="Selenium sync failed with unexpected error",
                 sync_started_at=sync_started,
                 sync_completed_at=datetime.now(UTC),
                 error=str(e),
