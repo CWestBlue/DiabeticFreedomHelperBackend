@@ -1,11 +1,12 @@
 """Food Scan API routes.
 
-Meal Vision Feature - MVP-2.1
+Meal Vision Feature - MVP-2.1 + MVP-2.4
 Endpoint for processing food images with depth data.
 """
 
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import uuid4
@@ -22,6 +23,10 @@ from diabetic_api.models.food_scan import (
     Macros,
     ScanErrorCode,
     ScanQuality,
+)
+from diabetic_api.services.food_recognition import (
+    FoodRecognitionError,
+    get_food_recognition_service,
 )
 
 router = APIRouter()
@@ -348,20 +353,140 @@ async def scan_food(
     )
     
     # -------------------------------------------------------------------------
-    # Step 6: Process scan (STUB - MVP-2.3 through MVP-2.8)
+    # Step 6: Food Recognition via LLaVA/Ollama (MVP-2.4)
     # -------------------------------------------------------------------------
-    # TODO: Replace with actual ML pipeline:
-    # - MVP-2.3: Food Segmentation
-    # - MVP-2.4: Food Identification
-    # - MVP-2.5: Volume Computation
-    # - MVP-2.6: Weight Estimation
-    # - MVP-2.7: Nutrition Resolution
-    # - MVP-2.8: Confidence Engine
+    # Read RGB image for recognition
+    rgb_data = await rgb.read()
+    await rgb.seek(0)
     
-    # For now, return mock response to verify contract
+    # Check if food recognition is enabled (default: True)
+    use_food_recognition = os.getenv("FOOD_RECOGNITION_ENABLED", "true").lower() == "true"
+    
+    if use_food_recognition:
+        try:
+            food_service = get_food_recognition_service()
+            
+            # Check service health first
+            is_healthy = await food_service.health_check()
+            if not is_healthy:
+                logger.warning("Food recognition service unhealthy, using fallback")
+                raise FoodRecognitionError(
+                    message="Service not available",
+                    error_code="SERVICE_UNAVAILABLE",
+                    provider=food_service.provider_name,
+                )
+            
+            # Recognize foods in the image
+            recognition_result = await food_service.recognize(
+                image_data=rgb_data,
+                max_foods=5,
+                include_macros=True,
+                include_portions=True,
+            )
+            
+            logger.info(
+                f"Food recognition complete",
+                extra={
+                    "scan_id": scan_id,
+                    "provider": recognition_result.provider,
+                    "foods_found": len(recognition_result.foods),
+                    "confidence": recognition_result.overall_confidence,
+                    "processing_time_ms": recognition_result.processing_time_ms,
+                },
+            )
+            
+            # Convert recognition results to API response format
+            food_candidates = []
+            for food in recognition_result.foods:
+                candidate = FoodCandidate(
+                    canonical_food_id=f"llava_{food.label.lower().replace(' ', '_')}",
+                    label=food.label,
+                    probability=food.confidence,
+                    is_mixed_dish=food.is_mixed_dish,
+                )
+                food_candidates.append(candidate)
+            
+            # Get macros from primary food or total
+            primary_food = recognition_result.primary_food
+            total_macros = recognition_result.total_estimated_macros
+            
+            if total_macros:
+                macros = Macros(
+                    carbs=total_macros.carbs,
+                    protein=total_macros.protein,
+                    fat=total_macros.fat,
+                    fiber=total_macros.fiber,
+                )
+            else:
+                # Fallback macros if recognition didn't provide them
+                macros = Macros(carbs=0.0, protein=0.0, fat=0.0, fiber=0.0)
+            
+            # Estimate grams from primary food
+            grams_est = primary_food.estimated_grams if primary_food else 100.0
+            
+            # Build macro ranges (±20% for MVP)
+            variance = 0.20
+            macro_ranges = MacroRanges(
+                carbs_p10=max(0, macros.carbs * (1 - variance)),
+                carbs_p90=macros.carbs * (1 + variance),
+                protein_p10=max(0, macros.protein * (1 - variance)),
+                protein_p90=macros.protein * (1 + variance),
+                fat_p10=max(0, macros.fat * (1 - variance)),
+                fat_p90=macros.fat * (1 + variance),
+                fiber_p10=max(0, macros.fiber * (1 - variance)),
+                fiber_p90=macros.fiber * (1 + variance),
+            )
+            
+            # Select quality based on confidence
+            if recognition_result.overall_confidence >= 0.8:
+                scan_quality = ScanQuality.GOOD
+            elif recognition_result.overall_confidence >= 0.5:
+                scan_quality = ScanQuality.OK
+            else:
+                scan_quality = ScanQuality.POOR
+            
+            # Add uncertainty reasons
+            uncertainty_reasons = []
+            if recognition_result.overall_confidence < 0.7:
+                uncertainty_reasons.append("low_recognition_confidence")
+            if not food_candidates:
+                uncertainty_reasons.append("no_food_detected")
+            
+            selected_food = food_candidates[0] if food_candidates else None
+            
+            return FoodScanResponse(
+                scan_id=scan_id,
+                food_candidates=food_candidates,
+                selected_food=selected_food,
+                volume_ml=grams_est * 0.9 if grams_est else 100.0,  # Rough estimate
+                grams_est=grams_est or 100.0,
+                macros=macros,
+                macro_ranges=macro_ranges,
+                confidence_score=recognition_result.overall_confidence,
+                scan_quality=scan_quality,
+                uncertainty_reasons=uncertainty_reasons,
+                debug={
+                    "validation": "passed",
+                    "depth_info": depth_info,
+                    "provider": recognition_result.provider,
+                    "processing_time_ms": recognition_result.processing_time_ms,
+                    "raw_response": recognition_result.raw_response[:500] if scan_request.opt_in_store_artifacts else None,
+                } if scan_request.opt_in_store_artifacts else None,
+                processed_at=datetime.now(UTC),
+            )
+            
+        except FoodRecognitionError as e:
+            logger.warning(f"Food recognition failed: {e.message}, using fallback")
+            # Fall through to fallback response below
+    
+    # -------------------------------------------------------------------------
+    # Fallback: Return mock response when recognition unavailable
+    # -------------------------------------------------------------------------
+    logger.info(f"Using fallback mock response for scan {scan_id}")
+    
     mock_candidate = FoodCandidate(
-        canonical_food_id="stub_food_001",
-        label="[STUB] Scan validated - ML not implemented",
+        canonical_food_id="fallback_001",
+        label="[Recognition unavailable] Please try again",
         probability=0.5,
         is_mixed_dish=False,
     )
@@ -389,14 +514,45 @@ async def scan_food(
         macro_ranges=mock_ranges,
         confidence_score=0.5,
         scan_quality=ScanQuality.OK,
-        uncertainty_reasons=[],
+        uncertainty_reasons=["recognition_service_unavailable"],
         debug={
             "validation": "passed",
             "depth_info": depth_info,
-            "note": "ML pipeline not yet implemented (MVP-2.3+)",
+            "note": "Food recognition service unavailable, using fallback",
         } if scan_request.opt_in_store_artifacts else None,
         processed_at=datetime.now(UTC),
     )
+
+
+@router.get(
+    "/recognition/health",
+    summary="Check food recognition service health",
+    description="Check if the food recognition service (Ollama/LLaVA) is available.",
+)
+async def check_recognition_health() -> dict:
+    """
+    Check if the food recognition service is healthy and available.
+    
+    Returns:
+        dict with status, provider, and model information
+    """
+    try:
+        service = get_food_recognition_service()
+        is_healthy = await service.health_check()
+        
+        return {
+            "status": "healthy" if is_healthy else "unhealthy",
+            "provider": service.provider_name,
+            "available": is_healthy,
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "error",
+            "provider": "unknown",
+            "available": False,
+            "error": str(e),
+        }
 
 
 @router.get(

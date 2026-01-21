@@ -53,14 +53,19 @@ class Settings(BaseSettings):
     langchain_project: str = "DiabeticAIChat"  # Project name in LangSmith
     langchain_endpoint: str = "https://api.smith.langchain.com"  # LangSmith API endpoint
 
-    # CareLink Sync Configuration
-    carelink_username: str = ""
-    carelink_password: str = ""
-    carelink_country_code: str = "us"
-    carelink_headless: bool = True  # Set to False to see browser window for debugging
+    # CareLink Sync Configuration (Token-based API)
+    # Get token by logging into CareLink in browser, then extract 'auth_tmp_token' cookie
+    carelink_token: str = ""  # Initial auth token from browser cookie
+    carelink_country_code: str = "us"  # 'us' or country code for EU
+    carelink_patient_username: str = ""  # Optional: specific patient username (for care partners)
     sync_schedule_enabled: bool = False  # Enable weekly auto-sync
     sync_schedule_day: int = 0  # 0=Monday, 6=Sunday
     sync_schedule_hour: int = 6  # Hour in 24h format (0-23)
+    
+    # Legacy Selenium-based sync (deprecated)
+    carelink_username: str = ""
+    carelink_password: str = ""
+    carelink_headless: bool = True
 
     # App
     debug: bool = False
@@ -78,8 +83,17 @@ class Settings(BaseSettings):
 
     @property
     def is_carelink_configured(self) -> bool:
-        """Check if CareLink credentials are configured."""
+        """Check if CareLink is configured (token-based or legacy)."""
+        # Prefer token-based auth
+        if self.carelink_token:
+            return True
+        # Fall back to legacy username/password
         return bool(self.carelink_username and self.carelink_password)
+    
+    @property
+    def carelink_use_token_auth(self) -> bool:
+        """Check if token-based auth should be used."""
+        return bool(self.carelink_token)
 
 
 @lru_cache
