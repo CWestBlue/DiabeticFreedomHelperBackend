@@ -228,8 +228,10 @@ def generate_scan_id(user_id: str) -> str:
 )
 async def scan_food(
     rgb: Annotated[UploadFile, File(description="RGB image (JPEG)")],
-    depth_u16: Annotated[UploadFile, File(description="16-bit depth map (PNG)")],
     metadata: Annotated[str, Form(description="JSON metadata (FoodScanRequest)")],
+    depth_u16: Annotated[
+        UploadFile | None, File(description="16-bit depth map (PNG, optional)")
+    ] = None,
     confidence_u8: Annotated[
         UploadFile | None, File(description="Confidence map (PNG)")
     ] = None,
@@ -297,24 +299,28 @@ async def scan_food(
         )
     await validate_file_size(rgb, MAX_RGB_SIZE, "RGB image")
     
-    # Validate depth map
-    if depth_u16.content_type != "image/png":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=FoodScanError(
-                error_code=ScanErrorCode.PROCESSING_ERROR,
-                message="Depth map must be PNG format",
-                details={"received_type": depth_u16.content_type},
-            ).model_dump(),
+    # Validate depth map (optional for MVP - many devices don't support depth)
+    depth_info = None
+    if depth_u16 is not None:
+        if depth_u16.content_type != "image/png":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=FoodScanError(
+                    error_code=ScanErrorCode.PROCESSING_ERROR,
+                    message="Depth map must be PNG format",
+                    details={"received_type": depth_u16.content_type},
+                ).model_dump(),
+            )
+        await validate_file_size(depth_u16, MAX_DEPTH_SIZE, "Depth map")
+        
+        # Validate depth dimensions match intrinsics
+        depth_info = await validate_depth_dimensions(
+            depth_u16,
+            scan_request.intrinsics.width,
+            scan_request.intrinsics.height,
         )
-    await validate_file_size(depth_u16, MAX_DEPTH_SIZE, "Depth map")
-    
-    # Validate depth dimensions match intrinsics
-    depth_info = await validate_depth_dimensions(
-        depth_u16,
-        scan_request.intrinsics.width,
-        scan_request.intrinsics.height,
-    )
+    else:
+        logger.info("No depth image provided - using RGB-only food recognition")
     
     # Validate confidence map if provided
     if confidence_u8 is not None:
@@ -346,7 +352,8 @@ async def scan_food(
             "device_platform": scan_request.device.platform,
             "image_dimensions": f"{scan_request.intrinsics.width}x"
                                f"{scan_request.intrinsics.height}",
-            "depth_bit_depth": depth_info.get("bit_depth"),
+            "has_depth": depth_info is not None,
+            "depth_bit_depth": depth_info.get("bit_depth") if depth_info else None,
             "has_confidence": confidence_u8 is not None,
             "opt_in_artifacts": scan_request.opt_in_store_artifacts,
         },
@@ -451,6 +458,8 @@ async def scan_food(
                 uncertainty_reasons.append("low_recognition_confidence")
             if not food_candidates:
                 uncertainty_reasons.append("no_food_detected")
+            if depth_info is None:
+                uncertainty_reasons.append("no_depth_data")
             
             selected_food = food_candidates[0] if food_candidates else None
             
