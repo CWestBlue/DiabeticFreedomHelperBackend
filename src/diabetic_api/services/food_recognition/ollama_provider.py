@@ -25,59 +25,62 @@ logger = logging.getLogger(__name__)
 
 
 # Prompt for food recognition
-FOOD_RECOGNITION_PROMPT = """Analyze this food image and identify all visible food items.
+FOOD_RECOGNITION_PROMPT = """Analyze this food image and provide EXACTLY 3 possible food identifications, ranked by confidence.
 
-IMPORTANT: For EACH distinct food item you see, also include 1-2 alternative identifications if the food could be something else. For example, if you see what looks like a chocolate bar, also consider it might be a brownie or chocolate fudge.
+CRITICAL: You MUST return exactly 3 different foods, even if you're confident about the primary one. Include:
+1. Your best guess (highest confidence)
+2. A reasonable alternative it could be
+3. Another possible identification
 
-For each food item (including alternatives), provide:
+Each food MUST have DIFFERENT macros based on what that specific food typically contains.
+
+For each food item provide:
 1. Food name (be specific, e.g., "grilled chicken breast" not just "chicken")
-2. Estimated portion size in grams
+2. Estimated portion size in grams (can vary per food)
 3. Confidence level (0.0 to 1.0) - lower for alternatives
 4. Food category (protein, carbohydrate, vegetable, fruit, dairy, fat, beverage, mixed)
-5. Estimated macronutrients per portion:
+5. Macronutrients per YOUR estimated portion (DIFFERENT for each food):
    - Carbohydrates (grams)
    - Protein (grams)
    - Fat (grams)
    - Fiber (grams)
 
-Respond ONLY with valid JSON in this exact format:
+Respond ONLY with valid JSON:
 {
   "foods": [
     {
-      "label": "chocolate bar",
+      "label": "milk chocolate bar",
       "confidence": 0.85,
-      "estimated_grams": 50,
+      "estimated_grams": 45,
       "category": "carbohydrate",
       "is_mixed_dish": false,
-      "macros": {
-        "carbs": 30,
-        "protein": 4,
-        "fat": 15,
-        "fiber": 2
-      }
+      "macros": {"carbs": 28, "protein": 4, "fat": 14, "fiber": 1}
     },
     {
-      "label": "brownie",
-      "confidence": 0.40,
+      "label": "chocolate brownie",
+      "confidence": 0.45,
       "estimated_grams": 60,
       "category": "carbohydrate",
       "is_mixed_dish": false,
-      "macros": {
-        "carbs": 35,
-        "protein": 3,
-        "fat": 12,
-        "fiber": 1
-      }
+      "macros": {"carbs": 35, "protein": 3, "fat": 12, "fiber": 2}
+    },
+    {
+      "label": "chocolate fudge",
+      "confidence": 0.25,
+      "estimated_grams": 40,
+      "category": "carbohydrate",
+      "is_mixed_dish": false,
+      "macros": {"carbs": 32, "protein": 2, "fat": 10, "fiber": 0}
     }
   ],
   "overall_confidence": 0.85
 }
 
 Rules:
-- Always include at least 2-3 food items when uncertain (primary + alternatives)
+- ALWAYS return EXACTLY 3 foods
+- Each food MUST have DIFFERENT macros appropriate for that food type
 - Sort by confidence (highest first)
-- Use realistic portion estimates based on typical serving sizes
-- If you cannot identify any food, return: {"foods": [], "overall_confidence": 0.0}
+- Be realistic with portion estimates
 
 Do not include any text outside the JSON."""
 

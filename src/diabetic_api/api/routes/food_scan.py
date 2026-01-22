@@ -424,15 +424,69 @@ async def scan_food(
             )
             
             # Convert recognition results to API response format
+            # Include macros for each candidate so user can see different values
             food_candidates = []
             for food in recognition_result.foods:
+                # Get macros for this specific candidate
+                candidate_macros = None
+                if food.estimated_macros:
+                    candidate_macros = Macros(
+                        carbs=food.estimated_macros.carbs,
+                        protein=food.estimated_macros.protein,
+                        fat=food.estimated_macros.fat,
+                        fiber=food.estimated_macros.fiber,
+                    )
+                
                 candidate = FoodCandidate(
                     canonical_food_id=f"llava_{food.label.lower().replace(' ', '_')}",
                     label=food.label,
                     probability=food.confidence,
                     is_mixed_dish=food.is_mixed_dish,
+                    estimated_grams=food.estimated_grams,
+                    macros=candidate_macros,
                 )
                 food_candidates.append(candidate)
+            
+            # Ensure minimum 3 candidates for user selection
+            MIN_CANDIDATES = 3
+            if len(food_candidates) < MIN_CANDIDATES and food_candidates:
+                primary = food_candidates[0]
+                # Create realistic variations with different macros
+                variation_templates = [
+                    {"suffix": "(smaller portion)", "gram_mult": 0.7, "macro_mult": 0.7},
+                    {"suffix": "(larger portion)", "gram_mult": 1.4, "macro_mult": 1.4},
+                    {"suffix": "(lighter version)", "gram_mult": 1.0, "macro_mult": 0.8},
+                ]
+                var_idx = 0
+                while len(food_candidates) < MIN_CANDIDATES and var_idx < len(variation_templates):
+                    template = variation_templates[var_idx]
+                    variation_label = f"{primary.label} {template['suffix']}"
+                    
+                    # Create varied macros
+                    var_macros = None
+                    if primary.macros:
+                        mult = template['macro_mult']
+                        var_macros = Macros(
+                            carbs=round(primary.macros.carbs * mult, 1),
+                            protein=round(primary.macros.protein * mult, 1),
+                            fat=round(primary.macros.fat * mult, 1),
+                            fiber=round(primary.macros.fiber * mult, 1),
+                        )
+                    
+                    var_grams = None
+                    if primary.estimated_grams:
+                        var_grams = round(primary.estimated_grams * template['gram_mult'], 0)
+                    
+                    variation = FoodCandidate(
+                        canonical_food_id=f"{primary.canonical_food_id}_var{var_idx + 1}",
+                        label=variation_label,
+                        probability=max(0.1, primary.probability - (0.15 * (var_idx + 1))),
+                        is_mixed_dish=primary.is_mixed_dish,
+                        estimated_grams=var_grams,
+                        macros=var_macros,
+                    )
+                    food_candidates.append(variation)
+                    var_idx += 1
             
             # Get macros from primary food or total (LLaVA estimates)
             primary_food = recognition_result.primary_food
