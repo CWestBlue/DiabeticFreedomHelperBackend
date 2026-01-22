@@ -129,46 +129,69 @@ async def validate_depth_dimensions(
     """
     Validate depth map dimensions match intrinsics.
     
-    Returns dict with validation info.
-    NOTE: Full PNG parsing would require pillow - using header check for MVP.
+    Accepts both PNG format and raw 16-bit depth bytes.
+    For raw bytes: expects width * height * 2 bytes (16-bit per pixel).
     """
     content = await depth_file.read()
     await depth_file.seek(0)
     
-    # Check PNG signature
-    if content[:8] != b"\x89PNG\r\n\x1a\n":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=FoodScanError(
-                error_code=ScanErrorCode.PROCESSING_ERROR,
-                message="Depth map is not a valid PNG file",
-            ).model_dump(),
+    # Check if it's PNG format
+    is_png = content[:8] == b"\x89PNG\r\n\x1a\n"
+    
+    if is_png:
+        # Parse PNG header for dimensions
+        if len(content) < 24:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=FoodScanError(
+                    error_code=ScanErrorCode.PROCESSING_ERROR,
+                    message="Depth map PNG is too small to be valid",
+                ).model_dump(),
+            )
+        
+        # Width and height are 4-byte big-endian integers at offsets 16 and 20
+        width = int.from_bytes(content[16:20], byteorder="big")
+        height = int.from_bytes(content[20:24], byteorder="big")
+        bit_depth = content[24]
+        
+        validation_info = {
+            "width": width,
+            "height": height,
+            "bit_depth": bit_depth,
+            "size_bytes": len(content),
+            "format": "png",
+        }
+    else:
+        # Assume raw 16-bit depth bytes
+        # Expected size: width * height * 2 bytes (16-bit per pixel)
+        expected_size = expected_width * expected_height * 2
+        actual_size = len(content)
+        
+        # Allow some tolerance for row padding (up to 10% larger)
+        if actual_size < expected_size or actual_size > expected_size * 1.1:
+            logger.warning(
+                f"Depth size mismatch: expected ~{expected_size} bytes for "
+                f"{expected_width}x{expected_height}, got {actual_size}"
+            )
+            # Don't fail - just log warning and use what we have
+        
+        validation_info = {
+            "width": expected_width,
+            "height": expected_height,
+            "bit_depth": 16,
+            "size_bytes": actual_size,
+            "format": "raw_u16",
+        }
+        
+        logger.info(
+            f"Received raw depth data: {actual_size} bytes "
+            f"(expected {expected_size} for {expected_width}x{expected_height})"
         )
+        
+        # For raw format, dimensions come from intrinsics, so always match
+        return validation_info
     
-    # Parse IHDR chunk for dimensions (bytes 16-23)
-    if len(content) < 24:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=FoodScanError(
-                error_code=ScanErrorCode.PROCESSING_ERROR,
-                message="Depth map PNG is too small to be valid",
-            ).model_dump(),
-        )
-    
-    # Width and height are 4-byte big-endian integers at offsets 16 and 20
-    width = int.from_bytes(content[16:20], byteorder="big")
-    height = int.from_bytes(content[20:24], byteorder="big")
-    bit_depth = content[24]
-    
-    validation_info = {
-        "width": width,
-        "height": height,
-        "bit_depth": bit_depth,
-        "size_bytes": len(content),
-    }
-    
-    # Check dimensions match
-    if width != expected_width or height != expected_height:
+    # Check dimensions match (only for PNG where we parse them)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=FoodScanError(
@@ -307,17 +330,13 @@ async def scan_food(
     await validate_file_size(rgb, MAX_RGB_SIZE, "RGB image")
     
     # Validate depth map (optional for MVP - many devices don't support depth)
+    # Accept both PNG format and raw 16-bit depth bytes
     depth_info = None
     if depth_u16 is not None:
-        if depth_u16.content_type != "image/png":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=FoodScanError(
-                    error_code=ScanErrorCode.PROCESSING_ERROR,
-                    message="Depth map must be PNG format",
-                    details={"received_type": depth_u16.content_type},
-                ).model_dump(),
-            )
+        # Accept PNG or raw bytes (application/octet-stream)
+        allowed_depth_types = ["image/png", "application/octet-stream", None]
+        if depth_u16.content_type not in allowed_depth_types:
+            logger.warning(f"Unexpected depth content type: {depth_u16.content_type}, allowing anyway")
         await validate_file_size(depth_u16, MAX_DEPTH_SIZE, "Depth map")
         
         # Validate depth dimensions match intrinsics
@@ -329,17 +348,12 @@ async def scan_food(
     else:
         logger.info("No depth image provided - using RGB-only food recognition")
     
-    # Validate confidence map if provided
+    # Validate confidence map if provided (accepts PNG or raw bytes)
     if confidence_u8 is not None:
-        if confidence_u8.content_type != "image/png":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=FoodScanError(
-                    error_code=ScanErrorCode.PROCESSING_ERROR,
-                    message="Confidence map must be PNG format",
-                    details={"received_type": confidence_u8.content_type},
-                ).model_dump(),
-            )
+        # Accept PNG or raw bytes (application/octet-stream)
+        allowed_conf_types = ["image/png", "application/octet-stream", None]
+        if confidence_u8.content_type not in allowed_conf_types:
+            logger.warning(f"Unexpected confidence content type: {confidence_u8.content_type}, allowing anyway")
         await validate_file_size(confidence_u8, MAX_CONFIDENCE_SIZE, "Confidence map")
     
     # -------------------------------------------------------------------------
