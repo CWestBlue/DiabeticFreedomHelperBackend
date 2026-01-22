@@ -34,6 +34,7 @@ from diabetic_api.services.nutrition_lookup import (
     get_nutrition_lookup_service,
     NutritionLookupError,
 )
+from diabetic_api.services.confidence_engine import get_confidence_engine
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -442,6 +443,7 @@ async def scan_food(
             usda_macros: Macros | None = None
             usda_food_id: str | None = None
             usda_food_name: str | None = None
+            usda_match_score: float | None = None
             macro_source = MacroSource.LLAVA
             
             nutrition_service = get_nutrition_lookup_service()
@@ -452,6 +454,9 @@ async def scan_food(
                         primary_food.label,
                         max_results=3,
                     )
+                    
+                    # Always capture match score for confidence calculation
+                    usda_match_score = usda_result.match_score
                     
                     if usda_result.found and usda_result.nutrients:
                         # Scale USDA nutrients to estimated portion size
@@ -471,7 +476,7 @@ async def scan_food(
                         
                         logger.info(
                             f"USDA match found: {usda_food_name} (ID: {usda_food_id}), "
-                            f"match_score={usda_result.match_score:.2f}"
+                            f"match_score={usda_match_score:.2f}"
                         )
                 except NutritionLookupError as e:
                     logger.warning(f"USDA lookup failed: {e.message}")
@@ -487,37 +492,36 @@ async def scan_food(
                 macros = Macros(carbs=0.0, protein=0.0, fat=0.0, fiber=0.0)
                 macro_source = MacroSource.UNKNOWN
             
-            # Build macro ranges (±20% for MVP, tighter if USDA match)
-            variance = 0.15 if macro_source == MacroSource.USDA else 0.25
-            macro_ranges = MacroRanges(
-                carbs_p10=max(0, macros.carbs * (1 - variance)),
-                carbs_p90=macros.carbs * (1 + variance),
-                protein_p10=max(0, macros.protein * (1 - variance)),
-                protein_p90=macros.protein * (1 + variance),
-                fat_p10=max(0, macros.fat * (1 - variance)),
-                fat_p90=macros.fat * (1 + variance),
-                fiber_p10=max(0, macros.fiber * (1 - variance)),
-                fiber_p90=macros.fiber * (1 + variance),
+            # ---------------------------------------------------------------
+            # Confidence Engine (MVP-2.8)
+            # ---------------------------------------------------------------
+            confidence_engine = get_confidence_engine()
+            
+            # Check if any food is a mixed dish
+            is_mixed_dish = any(f.is_mixed_dish for f in recognition_result.foods)
+            
+            confidence_result = confidence_engine.calculate_confidence(
+                recognition_confidence=recognition_result.overall_confidence,
+                usda_match_score=usda_match_score,
+                has_usda_match=usda_macros is not None,
+                macro_source=macro_source,
+                has_depth_data=depth_info is not None,
+                is_mixed_dish=is_mixed_dish,
+                estimated_grams=grams_est,
             )
             
-            # Select quality based on confidence
-            if recognition_result.overall_confidence >= 0.8:
-                scan_quality = ScanQuality.GOOD
-            elif recognition_result.overall_confidence >= 0.5:
-                scan_quality = ScanQuality.OK
-            else:
-                scan_quality = ScanQuality.POOR
+            # Use confidence engine results
+            scan_quality = confidence_result.scan_quality
+            uncertainty_reasons = confidence_result.uncertainty_reasons
             
-            # Add uncertainty reasons
-            uncertainty_reasons: list[UncertaintyReason] = []
-            if recognition_result.overall_confidence < 0.7:
-                uncertainty_reasons.append(UncertaintyReason.LOW_RECOGNITION_CONFIDENCE)
+            # Calculate macro ranges using confidence-based variance
+            macro_ranges = confidence_engine.calculate_macro_ranges(
+                macros, confidence_result.macro_variance
+            )
+            
+            # Add unknown food if no candidates
             if not food_candidates:
                 uncertainty_reasons.append(UncertaintyReason.UNKNOWN_FOOD)
-            if depth_info is None:
-                uncertainty_reasons.append(UncertaintyReason.NO_DEPTH_DATA)
-            if not usda_macros and llava_macros:
-                uncertainty_reasons.append(UncertaintyReason.WEAK_FOOD_MAPPING)
             
             selected_food = food_candidates[0] if food_candidates else None
             
@@ -534,7 +538,7 @@ async def scan_food(
                 usda_macros=usda_macros,
                 usda_food_id=usda_food_id,
                 usda_food_name=usda_food_name,
-                confidence_score=recognition_result.overall_confidence,
+                confidence_score=confidence_result.overall_score,
                 scan_quality=scan_quality,
                 uncertainty_reasons=uncertainty_reasons,
                 debug={
@@ -544,6 +548,8 @@ async def scan_food(
                     "processing_time_ms": recognition_result.processing_time_ms,
                     "raw_response": recognition_result.raw_response[:500] if scan_request.opt_in_store_artifacts else None,
                     "usda_lookup": usda_food_id is not None,
+                    "confidence_factors": confidence_result.factors.to_dict(),
+                    "macro_variance": f"±{confidence_result.macro_variance * 100:.0f}%",
                 } if scan_request.opt_in_store_artifacts else None,
                 processed_at=datetime.now(UTC),
             )
