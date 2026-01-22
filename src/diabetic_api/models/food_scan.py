@@ -40,6 +40,9 @@ class UncertaintyReason(str, Enum):
     PARTIAL_OCCLUSION = "partial_occlusion"
     LOW_LIGHTING = "low_lighting"
     MOTION_BLUR = "motion_blur"
+    NO_DEPTH_DATA = "no_depth_data"  # Depth sensor not available
+    LOW_RECOGNITION_CONFIDENCE = "low_recognition_confidence"  # AI recognition uncertain
+    RECOGNITION_SERVICE_UNAVAILABLE = "recognition_service_unavailable"  # Ollama/LLaVA unavailable
 
 
 class ScanQuality(str, Enum):
