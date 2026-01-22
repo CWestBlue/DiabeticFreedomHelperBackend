@@ -207,6 +207,12 @@ class FoodCandidate(BaseModel):
     is_mixed_dish: bool = Field(
         default=False, description="Whether this appears to be a mixed dish"
     )
+    estimated_grams: float | None = Field(
+        default=None, description="Estimated portion size in grams"
+    )
+    macros: "Macros | None" = Field(
+        default=None, description="Estimated macros for this candidate"
+    )
 
 
 class VolumeEstimate(BaseModel):
