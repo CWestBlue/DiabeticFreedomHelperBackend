@@ -25,19 +25,19 @@ logger = logging.getLogger(__name__)
 
 
 # Prompt for food recognition
-FOOD_RECOGNITION_PROMPT = """Analyze this food image and provide EXACTLY 3 possible food identifications, ranked by confidence.
+FOOD_RECOGNITION_PROMPT = """You are a food identification expert. Analyze this food image carefully.
 
-CRITICAL: You MUST return exactly 3 different foods, even if you're confident about the primary one. Include:
-1. Your best guess (highest confidence)
-2. A reasonable alternative it could be
-3. Another possible identification
+IMPORTANT ANALYSIS STEPS:
+1. Look for ANY visible text, logos, or brand names on packaging
+2. Look for nutrition labels or product descriptions
+3. Consider the shape, texture, and color
 
-Each food MUST have DIFFERENT macros based on what that specific food typically contains.
+Provide EXACTLY 3 possible identifications ranked by confidence.
 
 For each food item provide:
-1. Food name (be specific, e.g., "grilled chicken breast" not just "chicken")
-2. Estimated portion size in grams (can vary per food)
-3. Confidence level (0.0 to 1.0) - lower for alternatives
+1. Food name - BE SPECIFIC! Include brand if visible (e.g., "Quest protein bar" not just "chocolate bar")
+2. Estimated portion size in grams
+3. Confidence level (0.0 to 1.0)
 4. Food category (protein, carbohydrate, vegetable, fruit, dairy, fat, beverage, mixed)
 5. Macronutrients per YOUR estimated portion (DIFFERENT for each food):
    - Carbohydrates (grams)
@@ -49,36 +49,36 @@ Respond ONLY with valid JSON:
 {
   "foods": [
     {
-      "label": "milk chocolate bar",
-      "confidence": 0.85,
-      "estimated_grams": 45,
-      "category": "carbohydrate",
-      "is_mixed_dish": false,
-      "macros": {"carbs": 28, "protein": 4, "fat": 14, "fiber": 1}
-    },
-    {
-      "label": "chocolate brownie",
-      "confidence": 0.45,
+      "label": "protein bar",
+      "confidence": 0.80,
       "estimated_grams": 60,
-      "category": "carbohydrate",
+      "category": "protein",
       "is_mixed_dish": false,
-      "macros": {"carbs": 35, "protein": 3, "fat": 12, "fiber": 2}
+      "macros": {"carbs": 22, "protein": 20, "fat": 8, "fiber": 5}
     },
     {
-      "label": "chocolate fudge",
-      "confidence": 0.25,
+      "label": "chocolate candy bar",
+      "confidence": 0.35,
+      "estimated_grams": 50,
+      "category": "carbohydrate",
+      "is_mixed_dish": false,
+      "macros": {"carbs": 35, "protein": 3, "fat": 14, "fiber": 1}
+    },
+    {
+      "label": "granola bar",
+      "confidence": 0.20,
       "estimated_grams": 40,
       "category": "carbohydrate",
       "is_mixed_dish": false,
-      "macros": {"carbs": 32, "protein": 2, "fat": 10, "fiber": 0}
+      "macros": {"carbs": 25, "protein": 4, "fat": 6, "fiber": 2}
     }
   ],
-  "overall_confidence": 0.85
+  "overall_confidence": 0.80
 }
 
 Rules:
-- ALWAYS return EXACTLY 3 foods
-- Each food MUST have DIFFERENT macros appropriate for that food type
+- ALWAYS return EXACTLY 3 foods with DIFFERENT macros
+- Read any visible text/branding carefully
 - Sort by confidence (highest first)
 - Be realistic with portion estimates
 
@@ -137,8 +137,9 @@ class OllamaFoodRecognition(FoodRecognitionService):
                 "images": [image_b64],
                 "stream": False,
                 "options": {
-                    "temperature": 0.1,  # Low temperature for consistent output
-                    "num_predict": 1024,  # Enough tokens for JSON response
+                    "temperature": 0.3,  # Slightly higher for better analysis variety
+                    "num_predict": 1500,  # More tokens for detailed analysis
+                    "top_p": 0.9,  # Allow some creativity in identification
                 },
             }
             
