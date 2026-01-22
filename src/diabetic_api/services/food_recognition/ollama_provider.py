@@ -49,29 +49,13 @@ Respond ONLY with valid JSON:
 {
   "foods": [
     {
-      "label": "protein bar",
+      "label": "label of the food",
       "confidence": 0.80,
       "estimated_grams": 60,
-      "category": "protein",
+      "category": "category of the food",
       "is_mixed_dish": false,
       "macros": {"carbs": 22, "protein": 20, "fat": 8, "fiber": 5}
     },
-    {
-      "label": "chocolate candy bar",
-      "confidence": 0.35,
-      "estimated_grams": 50,
-      "category": "carbohydrate",
-      "is_mixed_dish": false,
-      "macros": {"carbs": 35, "protein": 3, "fat": 14, "fiber": 1}
-    },
-    {
-      "label": "granola bar",
-      "confidence": 0.20,
-      "estimated_grams": 40,
-      "category": "carbohydrate",
-      "is_mixed_dish": false,
-      "macros": {"carbs": 25, "protein": 4, "fat": 6, "fiber": 2}
-    }
   ],
   "overall_confidence": 0.80
 }
