@@ -27,10 +27,12 @@ logger = logging.getLogger(__name__)
 # Prompt for food recognition
 FOOD_RECOGNITION_PROMPT = """Analyze this food image and identify all visible food items.
 
-For each food item, provide:
+IMPORTANT: For EACH distinct food item you see, also include 1-2 alternative identifications if the food could be something else. For example, if you see what looks like a chocolate bar, also consider it might be a brownie or chocolate fudge.
+
+For each food item (including alternatives), provide:
 1. Food name (be specific, e.g., "grilled chicken breast" not just "chicken")
 2. Estimated portion size in grams
-3. Confidence level (0.0 to 1.0)
+3. Confidence level (0.0 to 1.0) - lower for alternatives
 4. Food category (protein, carbohydrate, vegetable, fruit, dairy, fat, beverage, mixed)
 5. Estimated macronutrients per portion:
    - Carbohydrates (grams)
@@ -42,26 +44,41 @@ Respond ONLY with valid JSON in this exact format:
 {
   "foods": [
     {
-      "label": "food name",
+      "label": "chocolate bar",
       "confidence": 0.85,
-      "estimated_grams": 150,
-      "category": "protein",
+      "estimated_grams": 50,
+      "category": "carbohydrate",
       "is_mixed_dish": false,
       "macros": {
-        "carbs": 0,
-        "protein": 35,
-        "fat": 8,
-        "fiber": 0
+        "carbs": 30,
+        "protein": 4,
+        "fat": 15,
+        "fiber": 2
+      }
+    },
+    {
+      "label": "brownie",
+      "confidence": 0.40,
+      "estimated_grams": 60,
+      "category": "carbohydrate",
+      "is_mixed_dish": false,
+      "macros": {
+        "carbs": 35,
+        "protein": 3,
+        "fat": 12,
+        "fiber": 1
       }
     }
   ],
   "overall_confidence": 0.85
 }
 
-If you cannot identify any food, return:
-{"foods": [], "overall_confidence": 0.0}
+Rules:
+- Always include at least 2-3 food items when uncertain (primary + alternatives)
+- Sort by confidence (highest first)
+- Use realistic portion estimates based on typical serving sizes
+- If you cannot identify any food, return: {"foods": [], "overall_confidence": 0.0}
 
-Be realistic with portion estimates based on typical serving sizes.
 Do not include any text outside the JSON."""
 
 
