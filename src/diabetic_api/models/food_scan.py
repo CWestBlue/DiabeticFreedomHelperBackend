@@ -45,6 +45,15 @@ class UncertaintyReason(str, Enum):
     RECOGNITION_SERVICE_UNAVAILABLE = "recognition_service_unavailable"  # Ollama/LLaVA unavailable
 
 
+class MacroSource(str, Enum):
+    """Source of macro nutrient data."""
+    
+    USDA = "usda"  # USDA FoodData Central
+    LLAVA = "llava"  # AI/LLaVA estimate
+    USER_OVERRIDE = "user_override"  # User-provided values
+    UNKNOWN = "unknown"
+
+
 class ScanQuality(str, Enum):
     """Overall scan quality indicator."""
 
@@ -247,8 +256,25 @@ class FoodScanResponse(BaseModel):
     grams_est: float = Field(..., ge=0, description="Estimated weight in grams")
 
     # Nutritional values
-    macros: Macros = Field(..., description="Estimated macronutrients")
+    macros: Macros = Field(..., description="Primary macronutrients (from best source)")
     macro_ranges: MacroRanges = Field(..., description="P10-P90 confidence ranges")
+    
+    # Macro source tracking (MVP-2.7)
+    macro_source: MacroSource = Field(
+        MacroSource.LLAVA, description="Source of primary macros: usda, llava, or user_override"
+    )
+    llava_macros: Macros | None = Field(
+        None, description="AI-estimated macros from LLaVA (always included when available)"
+    )
+    usda_macros: Macros | None = Field(
+        None, description="USDA database macros (null if no match found)"
+    )
+    usda_food_id: str | None = Field(
+        None, description="USDA FoodData Central ID for the matched food"
+    )
+    usda_food_name: str | None = Field(
+        None, description="Official USDA food name"
+    )
 
     # Confidence & quality
     confidence_score: Annotated[float, Field(ge=0, le=1)] = Field(

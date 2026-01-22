@@ -20,6 +20,7 @@ from diabetic_api.models.food_scan import (
     FoodScanRequest,
     FoodScanResponse,
     MacroRanges,
+    MacroSource,
     Macros,
     ScanErrorCode,
     ScanQuality,
@@ -28,6 +29,10 @@ from diabetic_api.models.food_scan import (
 from diabetic_api.services.food_recognition import (
     FoodRecognitionError,
     get_food_recognition_service,
+)
+from diabetic_api.services.nutrition_lookup import (
+    get_nutrition_lookup_service,
+    NutritionLookupError,
 )
 
 router = APIRouter()
@@ -414,26 +419,76 @@ async def scan_food(
                 )
                 food_candidates.append(candidate)
             
-            # Get macros from primary food or total
+            # Get macros from primary food or total (LLaVA estimates)
             primary_food = recognition_result.primary_food
             total_macros = recognition_result.total_estimated_macros
             
+            # Store LLaVA macros
+            llava_macros: Macros | None = None
             if total_macros:
-                macros = Macros(
+                llava_macros = Macros(
                     carbs=total_macros.carbs,
                     protein=total_macros.protein,
                     fat=total_macros.fat,
                     fiber=total_macros.fiber,
                 )
-            else:
-                # Fallback macros if recognition didn't provide them
-                macros = Macros(carbs=0.0, protein=0.0, fat=0.0, fiber=0.0)
             
             # Estimate grams from primary food
             grams_est = primary_food.estimated_grams if primary_food else 100.0
             
-            # Build macro ranges (±20% for MVP)
-            variance = 0.20
+            # ---------------------------------------------------------------
+            # USDA Nutrition Lookup (MVP-2.7)
+            # ---------------------------------------------------------------
+            usda_macros: Macros | None = None
+            usda_food_id: str | None = None
+            usda_food_name: str | None = None
+            macro_source = MacroSource.LLAVA
+            
+            nutrition_service = get_nutrition_lookup_service()
+            if nutrition_service and primary_food:
+                try:
+                    logger.info(f"Looking up USDA nutrition for: {primary_food.label}")
+                    usda_result = await nutrition_service.search_food(
+                        primary_food.label,
+                        max_results=3,
+                    )
+                    
+                    if usda_result.found and usda_result.nutrients:
+                        # Scale USDA nutrients to estimated portion size
+                        scaled_nutrients = usda_result.nutrients.scale_to_grams(
+                            grams_est or 100.0
+                        )
+                        
+                        usda_macros = Macros(
+                            carbs=round(scaled_nutrients.carbs, 1),
+                            protein=round(scaled_nutrients.protein, 1),
+                            fat=round(scaled_nutrients.fat, 1),
+                            fiber=round(scaled_nutrients.fiber, 1),
+                        )
+                        usda_food_id = usda_result.food_id
+                        usda_food_name = usda_result.food_name
+                        macro_source = MacroSource.USDA
+                        
+                        logger.info(
+                            f"USDA match found: {usda_food_name} (ID: {usda_food_id}), "
+                            f"match_score={usda_result.match_score:.2f}"
+                        )
+                except NutritionLookupError as e:
+                    logger.warning(f"USDA lookup failed: {e.message}")
+                except Exception as e:
+                    logger.warning(f"Unexpected error in USDA lookup: {e}")
+            
+            # Use USDA macros as primary if available, else LLaVA
+            if usda_macros:
+                macros = usda_macros
+            elif llava_macros:
+                macros = llava_macros
+            else:
+                macros = Macros(carbs=0.0, protein=0.0, fat=0.0, fiber=0.0)
+                macro_source = MacroSource.UNKNOWN
+            
+            # Build macro ranges (±20% for MVP, tighter if USDA match)
+            variance = 0.15 if macro_source == MacroSource.USDA else 0.25
             macro_ranges = MacroRanges(
                 carbs_p10=max(0, macros.carbs * (1 - variance)),
                 carbs_p90=macros.carbs * (1 + variance),
@@ -461,6 +516,8 @@ async def scan_food(
                 uncertainty_reasons.append(UncertaintyReason.UNKNOWN_FOOD)
             if depth_info is None:
                 uncertainty_reasons.append(UncertaintyReason.NO_DEPTH_DATA)
+            if not usda_macros and llava_macros:
+                uncertainty_reasons.append(UncertaintyReason.WEAK_FOOD_MAPPING)
             
             selected_food = food_candidates[0] if food_candidates else None
             
@@ -472,6 +529,11 @@ async def scan_food(
                 grams_est=grams_est or 100.0,
                 macros=macros,
                 macro_ranges=macro_ranges,
+                macro_source=macro_source,
+                llava_macros=llava_macros,
+                usda_macros=usda_macros,
+                usda_food_id=usda_food_id,
+                usda_food_name=usda_food_name,
                 confidence_score=recognition_result.overall_confidence,
                 scan_quality=scan_quality,
                 uncertainty_reasons=uncertainty_reasons,
@@ -481,6 +543,7 @@ async def scan_food(
                     "provider": recognition_result.provider,
                     "processing_time_ms": recognition_result.processing_time_ms,
                     "raw_response": recognition_result.raw_response[:500] if scan_request.opt_in_store_artifacts else None,
+                    "usda_lookup": usda_food_id is not None,
                 } if scan_request.opt_in_store_artifacts else None,
                 processed_at=datetime.now(UTC),
             )
@@ -522,6 +585,11 @@ async def scan_food(
         grams_est=150.0,
         macros=mock_macros,
         macro_ranges=mock_ranges,
+        macro_source=MacroSource.UNKNOWN,
+        llava_macros=None,
+        usda_macros=None,
+        usda_food_id=None,
+        usda_food_name=None,
         confidence_score=0.5,
         scan_quality=ScanQuality.OK,
         uncertainty_reasons=[UncertaintyReason.RECOGNITION_SERVICE_UNAVAILABLE],

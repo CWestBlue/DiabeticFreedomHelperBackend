@@ -67,10 +67,26 @@ class Settings(BaseSettings):
     carelink_password: str = ""
     carelink_headless: bool = True
 
+    # Food Recognition & Nutrition
+    food_recognition_provider: str = "ollama"  # ollama, openai, etc.
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llava:7b"
+    ollama_timeout: float = 60.0
+    
+    # USDA FoodData Central API
+    usda_api_key: str = ""
+    usda_api_base_url: str = "https://api.nal.usda.gov/fdc/v1"
+    usda_enabled: bool = True  # Enable USDA nutrition lookup
+    
     # App
     debug: bool = False
     app_name: str = "Diabetic AI API"
     api_version: str = "1.0.0"
+    
+    @property
+    def is_usda_configured(self) -> bool:
+        """Check if USDA API is configured."""
+        return bool(self.usda_api_key) and self.usda_enabled
 
     @property
     def is_llm_configured(self) -> bool:
