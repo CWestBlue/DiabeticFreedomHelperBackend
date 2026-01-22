@@ -71,18 +71,19 @@ class USDANutritionLookup(NutritionLookupService):
         """
         Search USDA FoodData Central for a food.
         
-        Prefers Foundation and SR Legacy data types for accuracy.
+        Searches all data types (Foundation, SR Legacy, Survey, Branded) and
+        returns the best match based on USDA's relevance scoring.
         """
         try:
             # Search endpoint
             search_url = f"{self.base_url}/foods/search"
             
+            # Search all data types - don't restrict
+            # USDA will return results sorted by relevance score
             params = {
                 "api_key": self.api_key,
                 "query": query,
-                "pageSize": max_results + 5,  # Get extra to filter
-                # Prefer foundation/standard reference data over branded
-                "dataType": ["Foundation", "SR Legacy", "Survey (FNDDS)"],
+                "pageSize": max_results + 10,  # Get extra for better matching
             }
             
             logger.info(f"Searching USDA for: {query}")
@@ -99,6 +100,9 @@ class USDANutritionLookup(NutritionLookupService):
             
             data = response.json()
             foods = data.get("foods", [])
+            total_hits = data.get("totalHits", 0)
+            
+            logger.info(f"USDA search for '{query}' returned {total_hits} total hits, {len(foods)} in page")
             
             if not foods:
                 logger.info(f"No USDA results for: {query}")
@@ -108,7 +112,14 @@ class USDANutritionLookup(NutritionLookupService):
                     search_query=query,
                 )
             
-            # Get best match (first result after filtering)
+            # Log top results for debugging
+            for i, food in enumerate(foods[:3]):
+                logger.debug(
+                    f"  Result {i+1}: {food.get('description')} "
+                    f"[{food.get('dataType')}] score={food.get('score', 'N/A')}"
+                )
+            
+            # Get best match (first result - highest relevance)
             best_match = foods[0]
             
             # Extract nutrients from search result
@@ -116,7 +127,7 @@ class USDANutritionLookup(NutritionLookupService):
             
             # Build alternative matches
             alternatives = []
-            for food in foods[1:max_results]:
+            for food in foods[1:max_results + 1]:
                 alternatives.append({
                     "id": str(food.get("fdcId")),
                     "name": food.get("description", "Unknown"),
@@ -126,8 +137,8 @@ class USDANutritionLookup(NutritionLookupService):
             
             # Calculate match score based on search score or position
             search_score = best_match.get("score", 0)
-            # Normalize score (USDA scores vary widely)
-            match_score = min(1.0, search_score / 1000) if search_score else 0.8
+            # Normalize score (USDA scores vary widely, typically 100-1000+)
+            match_score = min(1.0, search_score / 500) if search_score else 0.8
             
             return NutritionResult(
                 found=True,
