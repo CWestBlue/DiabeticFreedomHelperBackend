@@ -23,6 +23,7 @@ from diabetic_api.models.food_scan import (
     Macros,
     ScanErrorCode,
     ScanQuality,
+    UncertaintyReason,
 )
 from diabetic_api.services.food_recognition import (
     FoodRecognitionError,
@@ -453,13 +454,13 @@ async def scan_food(
                 scan_quality = ScanQuality.POOR
             
             # Add uncertainty reasons
-            uncertainty_reasons = []
+            uncertainty_reasons: list[UncertaintyReason] = []
             if recognition_result.overall_confidence < 0.7:
-                uncertainty_reasons.append("low_recognition_confidence")
+                uncertainty_reasons.append(UncertaintyReason.LOW_RECOGNITION_CONFIDENCE)
             if not food_candidates:
-                uncertainty_reasons.append("no_food_detected")
+                uncertainty_reasons.append(UncertaintyReason.UNKNOWN_FOOD)
             if depth_info is None:
-                uncertainty_reasons.append("no_depth_data")
+                uncertainty_reasons.append(UncertaintyReason.NO_DEPTH_DATA)
             
             selected_food = food_candidates[0] if food_candidates else None
             
@@ -523,7 +524,7 @@ async def scan_food(
         macro_ranges=mock_ranges,
         confidence_score=0.5,
         scan_quality=ScanQuality.OK,
-        uncertainty_reasons=["recognition_service_unavailable"],
+        uncertainty_reasons=[UncertaintyReason.RECOGNITION_SERVICE_UNAVAILABLE],
         debug={
             "validation": "passed",
             "depth_info": depth_info,
