@@ -253,7 +253,17 @@ class OllamaFoodRecognition(FoodRecognitionService):
                 continue
         
         overall_confidence = float(data.get("overall_confidence", 0.5))
-        is_multi_food_plate = bool(data.get("is_multi_food_plate", len(foods) > 1))
+        
+        # Determine multi-food status: if we have multiple foods, it's multi-food
+        # regardless of what the LLM returns for is_multi_food_plate
+        # This ensures we don't miss multi-food detection due to LLM error
+        llm_says_multi = bool(data.get("is_multi_food_plate", False))
+        is_multi_food_plate = len(foods) > 1 or llm_says_multi
+        
+        logger.info(
+            f"Multi-food detection: foods_count={len(foods)}, "
+            f"llm_says_multi={llm_says_multi}, is_multi_food_plate={is_multi_food_plate}"
+        )
         
         return foods, overall_confidence, is_multi_food_plate
     
