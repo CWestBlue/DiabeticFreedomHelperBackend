@@ -9,6 +9,7 @@ from .repositories.meal_estimates import MealEstimateRepository
 from .repositories.pump_data import PumpDataRepository
 from .repositories.scan_artifacts import ScanArtifactRepository
 from .repositories.sessions import SessionRepository
+from diabetic_api.services.gridfs_storage import GridFSStorageService
 
 
 class UnitOfWork:
@@ -37,6 +38,7 @@ class UnitOfWork:
         self._meal_estimates: MealEstimateRepository | None = None
         self._food_scans: FoodScanRepository | None = None
         self._scan_artifacts: ScanArtifactRepository | None = None
+        self._gridfs: GridFSStorageService | None = None
 
     @property
     def pump_data(self) -> PumpDataRepository:
@@ -106,6 +108,21 @@ class UnitOfWork:
         if self._scan_artifacts is None:
             self._scan_artifacts = ScanArtifactRepository(self._db["scan_artifacts"])
         return self._scan_artifacts
+
+    @property
+    def gridfs(self) -> GridFSStorageService:
+        """
+        Get GridFS storage service (lazy loaded).
+        
+        Used for storing binary scan artifacts (RGB images, depth maps).
+        Provides efficient storage for files exceeding BSON limits.
+        
+        Returns:
+            GridFSStorageService instance
+        """
+        if self._gridfs is None:
+            self._gridfs = GridFSStorageService(self._db)
+        return self._gridfs
 
     async def run_aggregation(
         self,
