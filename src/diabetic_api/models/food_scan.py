@@ -207,11 +207,31 @@ class FoodCandidate(BaseModel):
     is_mixed_dish: bool = Field(
         default=False, description="Whether this appears to be a mixed dish"
     )
+    visible_components: list[str] | None = Field(
+        default=None, description="Visible components for mixed dishes (MVP-3.4)"
+    )
     estimated_grams: float | None = Field(
         default=None, description="Estimated portion size in grams"
     )
     macros: "Macros | None" = Field(
         default=None, description="Estimated macros for this candidate"
+    )
+
+
+class DetectedFood(BaseModel):
+    """A distinct food item detected on the plate (MVP-3.4).
+    
+    Unlike FoodCandidate (alternative interpretations of one food),
+    DetectedFood represents a separate physical food item.
+    """
+
+    id: str = Field(..., description="Unique ID for this detected food in the scan")
+    primary: FoodCandidate = Field(..., description="Primary identification")
+    alternatives: list[FoodCandidate] = Field(
+        default_factory=list, description="Alternative identifications for this food"
+    )
+    selected: bool = Field(
+        default=True, description="Whether user has selected this food for logging"
     )
 
 
@@ -244,26 +264,37 @@ class FoodScanResponse(BaseModel):
     Response payload for successful /food/scan request.
     
     Contains food identification, volume estimation, and nutritional analysis.
+    
+    MVP-3.4: Supports multi-food plates via detected_foods array.
     """
 
     # Identification
     scan_id: str = Field(..., description="Unique identifier for this scan")
 
-    # Food candidates (top-K results)
+    # Multi-food detection (MVP-3.4)
+    is_multi_food_plate: bool = Field(
+        default=False, description="Whether multiple distinct foods were detected"
+    )
+    detected_foods: list[DetectedFood] = Field(
+        default_factory=list, 
+        description="Distinct foods detected on plate (MVP-3.4). Each has primary + alternatives."
+    )
+
+    # Legacy single-food support (backward compatibility)
     food_candidates: list[FoodCandidate] = Field(
-        ..., min_length=1, max_length=10, description="Ranked food candidates"
+        default_factory=list, max_length=10, description="Ranked food candidates (legacy)"
     )
-    selected_food: FoodCandidate = Field(
-        ..., description="Top/selected food candidate"
+    selected_food: FoodCandidate | None = Field(
+        default=None, description="Top/selected food candidate (legacy, use detected_foods for multi-food)"
     )
 
-    # Volume & weight estimation
-    volume_ml: float = Field(..., ge=0, description="Estimated volume in milliliters")
-    grams_est: float = Field(..., ge=0, description="Estimated weight in grams")
+    # Volume & weight estimation (totals for all selected foods)
+    volume_ml: float = Field(..., ge=0, description="Estimated total volume in milliliters")
+    grams_est: float = Field(..., ge=0, description="Estimated total weight in grams")
 
-    # Nutritional values
-    macros: Macros = Field(..., description="Primary macronutrients (from best source)")
-    macro_ranges: MacroRanges = Field(..., description="P10-P90 confidence ranges")
+    # Nutritional values (totals for all selected foods in multi-food mode)
+    macros: Macros = Field(..., description="Total macronutrients (sum of all selected foods)")
+    macro_ranges: MacroRanges = Field(..., description="P10-P90 confidence ranges for totals")
     
     # Macro source tracking (MVP-2.7)
     macro_source: MacroSource = Field(

@@ -15,6 +15,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from diabetic_api.models.food_scan import (
+    DetectedFood,
     FoodCandidate,
     FoodScanError,
     FoodScanRequest,
@@ -418,79 +419,87 @@ async def scan_food(
                     "scan_id": scan_id,
                     "provider": recognition_result.provider,
                     "foods_found": len(recognition_result.foods),
+                    "is_multi_food_plate": recognition_result.is_multi_food_plate,
                     "confidence": recognition_result.overall_confidence,
                     "processing_time_ms": recognition_result.processing_time_ms,
                 },
             )
             
-            # Convert recognition results to API response format
-            # Include macros for each candidate so user can see different values
-            food_candidates = []
-            for food in recognition_result.foods:
-                # Get macros for this specific candidate
-                candidate_macros = None
+            # MVP-3.4: Build detected_foods array (one entry per distinct food)
+            detected_foods: list[DetectedFood] = []
+            food_candidates: list[FoodCandidate] = []  # Legacy support
+            
+            for idx, food in enumerate(recognition_result.foods):
+                # Get macros for this specific food
+                food_macros = None
                 if food.estimated_macros:
-                    candidate_macros = Macros(
+                    food_macros = Macros(
                         carbs=food.estimated_macros.carbs,
                         protein=food.estimated_macros.protein,
                         fat=food.estimated_macros.fat,
                         fiber=food.estimated_macros.fiber,
                     )
                 
-                candidate = FoodCandidate(
-                    canonical_food_id=f"llava_{food.label.lower().replace(' ', '_')}",
+                # Create primary candidate for this detected food
+                primary_candidate = FoodCandidate(
+                    canonical_food_id=f"llava_{food.label.lower().replace(' ', '_')}_{idx}",
                     label=food.label,
                     probability=food.confidence,
                     is_mixed_dish=food.is_mixed_dish,
+                    visible_components=food.visible_components,
                     estimated_grams=food.estimated_grams,
-                    macros=candidate_macros,
+                    macros=food_macros,
                 )
-                food_candidates.append(candidate)
-            
-            # Ensure minimum 3 candidates for user selection
-            MIN_CANDIDATES = 3
-            if len(food_candidates) < MIN_CANDIDATES and food_candidates:
-                primary = food_candidates[0]
-                # Create realistic variations with different macros
+                
+                # Add to legacy food_candidates for backward compatibility
+                food_candidates.append(primary_candidate)
+                
+                # Generate portion-based alternatives for this specific food
+                alternatives: list[FoodCandidate] = []
                 variation_templates = [
                     {"suffix": "(smaller portion)", "gram_mult": 0.7, "macro_mult": 0.7},
                     {"suffix": "(larger portion)", "gram_mult": 1.4, "macro_mult": 1.4},
-                    {"suffix": "(lighter version)", "gram_mult": 1.0, "macro_mult": 0.8},
                 ]
-                var_idx = 0
-                while len(food_candidates) < MIN_CANDIDATES and var_idx < len(variation_templates):
-                    template = variation_templates[var_idx]
-                    variation_label = f"{primary.label} {template['suffix']}"
-                    
-                    # Create varied macros
+                
+                for var_idx, template in enumerate(variation_templates):
                     var_macros = None
-                    if primary.macros:
+                    if food_macros:
                         mult = template['macro_mult']
                         var_macros = Macros(
-                            carbs=round(primary.macros.carbs * mult, 1),
-                            protein=round(primary.macros.protein * mult, 1),
-                            fat=round(primary.macros.fat * mult, 1),
-                            fiber=round(primary.macros.fiber * mult, 1),
+                            carbs=round(food_macros.carbs * mult, 1),
+                            protein=round(food_macros.protein * mult, 1),
+                            fat=round(food_macros.fat * mult, 1),
+                            fiber=round(food_macros.fiber * mult, 1),
                         )
                     
                     var_grams = None
-                    if primary.estimated_grams:
-                        var_grams = round(primary.estimated_grams * template['gram_mult'], 0)
+                    if food.estimated_grams:
+                        var_grams = round(food.estimated_grams * template['gram_mult'], 0)
                     
-                    variation = FoodCandidate(
-                        canonical_food_id=f"{primary.canonical_food_id}_var{var_idx + 1}",
-                        label=variation_label,
-                        probability=max(0.1, primary.probability - (0.15 * (var_idx + 1))),
-                        is_mixed_dish=primary.is_mixed_dish,
+                    alt = FoodCandidate(
+                        canonical_food_id=f"{primary_candidate.canonical_food_id}_var{var_idx + 1}",
+                        label=f"{food.label} {template['suffix']}",
+                        probability=max(0.1, food.confidence - (0.15 * (var_idx + 1))),
+                        is_mixed_dish=food.is_mixed_dish,
+                        visible_components=food.visible_components,
                         estimated_grams=var_grams,
                         macros=var_macros,
                     )
-                    food_candidates.append(variation)
-                    var_idx += 1
+                    alternatives.append(alt)
+                
+                # Create DetectedFood entry
+                detected_food = DetectedFood(
+                    id=f"food_{idx}",
+                    primary=primary_candidate,
+                    alternatives=alternatives,
+                    selected=True,  # All foods selected by default
+                )
+                detected_foods.append(detected_food)
             
-            # Get macros from primary food or total (LLaVA estimates)
+            # Calculate totals from all detected foods
             primary_food = recognition_result.primary_food
             total_macros = recognition_result.total_estimated_macros
+            is_multi_food_plate = recognition_result.is_multi_food_plate
             
             # Store LLaVA macros
             llava_macros: Macros | None = None
@@ -591,14 +600,26 @@ async def scan_food(
             if not food_candidates:
                 uncertainty_reasons.append(UncertaintyReason.UNKNOWN_FOOD)
             
+            # For legacy support: selected_food is the first candidate
             selected_food = food_candidates[0] if food_candidates else None
+            
+            # Calculate total grams from all detected foods
+            total_grams = sum(
+                df.primary.estimated_grams or 0 
+                for df in detected_foods
+            ) or grams_est or 100.0
             
             return FoodScanResponse(
                 scan_id=scan_id,
+                # MVP-3.4: Multi-food support
+                is_multi_food_plate=is_multi_food_plate,
+                detected_foods=detected_foods,
+                # Legacy support
                 food_candidates=food_candidates,
                 selected_food=selected_food,
-                volume_ml=grams_est * 0.9 if grams_est else 100.0,  # Rough estimate
-                grams_est=grams_est or 100.0,
+                # Totals
+                volume_ml=total_grams * 0.9,  # Rough estimate
+                grams_est=total_grams,
                 macros=macros,
                 macro_ranges=macro_ranges,
                 macro_source=macro_source,
@@ -616,6 +637,8 @@ async def scan_food(
                     "processing_time_ms": recognition_result.processing_time_ms,
                     "raw_response": recognition_result.raw_response[:500] if scan_request.opt_in_store_artifacts else None,
                     "usda_lookup": usda_food_id is not None,
+                    "is_multi_food_plate": is_multi_food_plate,
+                    "detected_foods_count": len(detected_foods),
                     "confidence_factors": confidence_result.factors.to_dict(),
                     "macro_variance": f"±{confidence_result.macro_variance * 100:.0f}%",
                 } if scan_request.opt_in_store_artifacts else None,
@@ -638,6 +661,13 @@ async def scan_food(
         is_mixed_dish=False,
     )
     
+    mock_detected_food = DetectedFood(
+        id="food_0",
+        primary=mock_candidate,
+        alternatives=[],
+        selected=True,
+    )
+    
     mock_macros = Macros(carbs=30.0, protein=10.0, fat=5.0, fiber=2.0)
     
     mock_ranges = MacroRanges(
@@ -653,6 +683,10 @@ async def scan_food(
     
     return FoodScanResponse(
         scan_id=scan_id,
+        # MVP-3.4: Multi-food support
+        is_multi_food_plate=False,
+        detected_foods=[mock_detected_food],
+        # Legacy support
         food_candidates=[mock_candidate],
         selected_food=mock_candidate,
         volume_ml=200.0,
