@@ -1046,20 +1046,20 @@ class MealEstimateResponse(BaseModel):
     The data is stored separately from CareLink pump data.
     """,
 )
-async def save_meal_estimate(request: SaveMealRequest) -> MealEstimateResponse:
+async def save_meal_estimate(
+    request: SaveMealRequest,
+    uow: UnitOfWork = Depends(get_uow),
+) -> MealEstimateResponse:
     """
     Save a confirmed meal estimate.
     
     MVP-3.3: Stores to meal_estimates collection (separate from pump_data).
     """
-    # Generate meal ID
-    meal_id = f"meal_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}_{uuid4().hex[:8]}"
     created_at = datetime.now(UTC)
     
     logger.info(
         "Saving meal estimate",
         extra={
-            "meal_id": meal_id,
             "scan_id": request.scan_id,
             "user_id": request.user_id,
             "food_label": request.food_label,
@@ -1067,8 +1067,19 @@ async def save_meal_estimate(request: SaveMealRequest) -> MealEstimateResponse:
         },
     )
     
-    # TODO: Actually persist to MongoDB via MealEstimateRepository
-    # For now, return success response for Flutter integration testing
+    # Persist to MongoDB via MealEstimateRepository
+    meal_id = await uow.meal_estimates.create_from_scan(
+        scan_id=request.scan_id,
+        user_id=request.user_id,
+        canonical_food_id=request.canonical_food_id,
+        food_label=request.food_label,
+        macros=request.macros.model_dump(),
+        confidence=request.confidence,
+        macro_ranges=request.macro_ranges.model_dump() if request.macro_ranges else None,
+        uncertainty_reasons=request.uncertainty_reasons,
+    )
+    
+    logger.info(f"Meal estimate saved with ID: {meal_id}")
     
     return MealEstimateResponse(
         id=meal_id,
@@ -1098,6 +1109,7 @@ async def get_meal_estimates(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     limit: int = 50,
+    uow: UnitOfWork = Depends(get_uow),
 ) -> MealListResponse:
     """
     Get meal estimates for a user within a date range.
@@ -1114,7 +1126,31 @@ async def get_meal_estimates(
         },
     )
     
-    # TODO: Actually query MongoDB via MealEstimateRepository
-    # For now, return empty list for integration testing
+    # Query MongoDB via MealEstimateRepository
+    meals = await uow.meal_estimates.get_user_meals(
+        user_id=user_id,
+        start=start_date,
+        end=end_date,
+        limit=limit,
+    )
     
-    return MealListResponse(meals=[], total=0)
+    # Convert to response format
+    meal_responses = [
+        MealEstimateResponse(
+            id=str(meal.id) if meal.id else "",
+            scan_id=meal.scan_id,
+            user_id=meal.user_id,
+            food_label=meal.food_label,
+            macros=Macros(
+                carbs=meal.macros.get("carbs", 0) if meal.macros else 0,
+                protein=meal.macros.get("protein", 0) if meal.macros else 0,
+                fat=meal.macros.get("fat", 0) if meal.macros else 0,
+                fiber=meal.macros.get("fiber", 0) if meal.macros else 0,
+            ),
+            confidence=meal.confidence,
+            created_at=meal.created_at,
+        )
+        for meal in meals
+    ]
+    
+    return MealListResponse(meals=meal_responses, total=len(meal_responses))
