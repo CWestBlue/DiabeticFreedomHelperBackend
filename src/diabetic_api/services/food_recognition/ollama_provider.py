@@ -25,91 +25,49 @@ logger = logging.getLogger(__name__)
 
 
 # Prompt for food recognition - Multi-food detection (MVP-3.4)
-FOOD_RECOGNITION_PROMPT = """You are a food identification expert. Analyze this food image and identify ALL DISTINCT FOODS visible.
+FOOD_RECOGNITION_PROMPT = """You are a food identification expert. Analyze this specific image and identify ALL DISTINCT FOODS you can see.
+
+CRITICAL: Only identify foods that are ACTUALLY VISIBLE in this image. Do not copy examples.
 
 ANALYSIS STEPS:
-1. Count how many DIFFERENT food items are visible on the plate/table
-2. For each distinct food, identify it separately
-3. Look for ANY visible text, logos, or brand names on packaging
-4. For mixed dishes: identify visible components if possible, OR return as single mixed dish
+1. Look carefully at the image - what foods do you actually see?
+2. Look for ANY visible text, logos, or brand names on packaging
+3. Count how many DIFFERENT food items are visible
+4. For each distinct food, identify it separately with realistic macros
 
-MULTI-FOOD DETECTION RULES:
-- If you see chicken, rice, and broccoli on a plate: return 3 separate food items
-- If you see a burger: return as 1 item (mixed dish) unless components are clearly separated
-- If you see a stir-fry: try to identify visible ingredients (e.g., chicken pieces, vegetables, rice) OR return as single "stir-fry" with aggregate macros
-- Maximum 8 distinct foods per scan
-
-For EACH distinct food provide:
-1. Food name - BE SPECIFIC! Include brand if visible
-2. Estimated portion size in grams for THAT food only
+For EACH distinct food you see, provide:
+1. Food name - BE SPECIFIC! Include brand if visible on packaging
+2. Estimated portion size in grams
 3. Confidence level (0.0 to 1.0)
-4. Food category (protein, carbohydrate, vegetable, fruit, dairy, fat, beverage, mixed)
+4. Food category (protein, carbohydrate, vegetable, fruit, dairy, fat, beverage, mixed, snack)
 5. Whether this item is a mixed dish (true/false)
 6. If mixed dish: list visible_components if identifiable
-7. Macronutrients for THAT food's portion:
-   - Carbohydrates (grams)
-   - Protein (grams)
-   - Fat (grams)
-   - Fiber (grams)
+7. Realistic macronutrients for the estimated portion
 
-Respond ONLY with valid JSON:
+Respond ONLY with valid JSON in this format:
 {
   "foods": [
     {
-      "label": "grilled chicken breast",
-      "confidence": 0.85,
-      "estimated_grams": 150,
-      "category": "protein",
-      "is_mixed_dish": false,
-      "visible_components": null,
-      "macros": {"carbs": 0, "protein": 35, "fat": 4, "fiber": 0}
-    },
-    {
-      "label": "steamed white rice",
-      "confidence": 0.90,
-      "estimated_grams": 200,
-      "category": "carbohydrate",
-      "is_mixed_dish": false,
-      "visible_components": null,
-      "macros": {"carbs": 45, "protein": 4, "fat": 0, "fiber": 1}
-    },
-    {
-      "label": "steamed broccoli",
-      "confidence": 0.88,
-      "estimated_grams": 100,
-      "category": "vegetable",
-      "is_mixed_dish": false,
-      "visible_components": null,
-      "macros": {"carbs": 7, "protein": 3, "fat": 0, "fiber": 3}
+      "label": "<actual food name you see>",
+      "confidence": <0.0-1.0>,
+      "estimated_grams": <number>,
+      "category": "<category>",
+      "is_mixed_dish": <true/false>,
+      "visible_components": <null or array of strings>,
+      "macros": {"carbs": <number>, "protein": <number>, "fat": <number>, "fiber": <number>}
     }
   ],
-  "is_multi_food_plate": true,
-  "overall_confidence": 0.85
+  "is_multi_food_plate": <true if multiple distinct foods, false otherwise>,
+  "overall_confidence": <0.0-1.0>
 }
 
-Example for MIXED DISH with decomposition:
-{
-  "foods": [
-    {
-      "label": "chicken stir-fry",
-      "confidence": 0.75,
-      "estimated_grams": 350,
-      "category": "mixed",
-      "is_mixed_dish": true,
-      "visible_components": ["chicken pieces", "bell peppers", "onions", "sauce"],
-      "macros": {"carbs": 15, "protein": 30, "fat": 12, "fiber": 3}
-    }
-  ],
-  "is_multi_food_plate": false,
-  "overall_confidence": 0.75
-}
-
-Rules:
-- Return 1-8 foods based on what you ACTUALLY SEE
-- Each food gets its own macros based on its visible portion
-- Do NOT make up foods that aren't visible
+RULES:
+- ONLY return foods you can ACTUALLY SEE in this image
+- Do NOT invent or assume foods that aren't visible
+- Return 1-8 foods maximum
+- Include brand names if visible (e.g., "Quest protein bar", "KIND bar", "Blue Diamond almonds")
+- Use realistic macros for the specific food identified
 - Sort by confidence (highest first)
-- Be realistic with portion estimates
 
 Do not include any text outside the JSON."""
 
