@@ -24,22 +24,29 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
-# Prompt for food recognition
-FOOD_RECOGNITION_PROMPT = """You are a food identification expert. Analyze this food image carefully.
+# Prompt for food recognition - Multi-food detection (MVP-3.4)
+FOOD_RECOGNITION_PROMPT = """You are a food identification expert. Analyze this food image and identify ALL DISTINCT FOODS visible.
 
-IMPORTANT ANALYSIS STEPS:
-1. Look for ANY visible text, logos, or brand names on packaging
-2. Look for nutrition labels or product descriptions
-3. Consider the shape, texture, and color
+ANALYSIS STEPS:
+1. Count how many DIFFERENT food items are visible on the plate/table
+2. For each distinct food, identify it separately
+3. Look for ANY visible text, logos, or brand names on packaging
+4. For mixed dishes: identify visible components if possible, OR return as single mixed dish
 
-Provide EXACTLY 3 possible identifications ranked by confidence.
+MULTI-FOOD DETECTION RULES:
+- If you see chicken, rice, and broccoli on a plate: return 3 separate food items
+- If you see a burger: return as 1 item (mixed dish) unless components are clearly separated
+- If you see a stir-fry: try to identify visible ingredients (e.g., chicken pieces, vegetables, rice) OR return as single "stir-fry" with aggregate macros
+- Maximum 8 distinct foods per scan
 
-For each food item provide:
-1. Food name - BE SPECIFIC! Include brand if visible (e.g., "Quest protein bar" not just "chocolate bar")
-2. Estimated portion size in grams
+For EACH distinct food provide:
+1. Food name - BE SPECIFIC! Include brand if visible
+2. Estimated portion size in grams for THAT food only
 3. Confidence level (0.0 to 1.0)
 4. Food category (protein, carbohydrate, vegetable, fruit, dairy, fat, beverage, mixed)
-5. Macronutrients per YOUR estimated portion (DIFFERENT for each food):
+5. Whether this item is a mixed dish (true/false)
+6. If mixed dish: list visible_components if identifiable
+7. Macronutrients for THAT food's portion:
    - Carbohydrates (grams)
    - Protein (grams)
    - Fat (grams)
@@ -49,20 +56,58 @@ Respond ONLY with valid JSON:
 {
   "foods": [
     {
-      "label": "label of the food",
-      "confidence": 0.80,
-      "estimated_grams": 60,
-      "category": "category of the food",
+      "label": "grilled chicken breast",
+      "confidence": 0.85,
+      "estimated_grams": 150,
+      "category": "protein",
       "is_mixed_dish": false,
-      "macros": {"carbs": 22, "protein": 20, "fat": 8, "fiber": 5}
+      "visible_components": null,
+      "macros": {"carbs": 0, "protein": 35, "fat": 4, "fiber": 0}
     },
+    {
+      "label": "steamed white rice",
+      "confidence": 0.90,
+      "estimated_grams": 200,
+      "category": "carbohydrate",
+      "is_mixed_dish": false,
+      "visible_components": null,
+      "macros": {"carbs": 45, "protein": 4, "fat": 0, "fiber": 1}
+    },
+    {
+      "label": "steamed broccoli",
+      "confidence": 0.88,
+      "estimated_grams": 100,
+      "category": "vegetable",
+      "is_mixed_dish": false,
+      "visible_components": null,
+      "macros": {"carbs": 7, "protein": 3, "fat": 0, "fiber": 3}
+    }
   ],
-  "overall_confidence": 0.80
+  "is_multi_food_plate": true,
+  "overall_confidence": 0.85
+}
+
+Example for MIXED DISH with decomposition:
+{
+  "foods": [
+    {
+      "label": "chicken stir-fry",
+      "confidence": 0.75,
+      "estimated_grams": 350,
+      "category": "mixed",
+      "is_mixed_dish": true,
+      "visible_components": ["chicken pieces", "bell peppers", "onions", "sauce"],
+      "macros": {"carbs": 15, "protein": 30, "fat": 12, "fiber": 3}
+    }
+  ],
+  "is_multi_food_plate": false,
+  "overall_confidence": 0.75
 }
 
 Rules:
-- ALWAYS return EXACTLY 3 foods with DIFFERENT macros
-- Read any visible text/branding carefully
+- Return 1-8 foods based on what you ACTUALLY SEE
+- Each food gets its own macros based on its visible portion
+- Do NOT make up foods that aren't visible
 - Sort by confidence (highest first)
 - Be realistic with portion estimates
 
@@ -148,17 +193,22 @@ class OllamaFoodRecognition(FoodRecognitionService):
             
             logger.debug(f"Raw Ollama response: {raw_response[:500]}...")
             
-            # Parse JSON from response
-            foods, overall_confidence = self._parse_response(raw_response)
+            # Parse JSON from response (MVP-3.4: now returns is_multi_food_plate)
+            foods, overall_confidence, is_multi_food_plate = self._parse_response(raw_response)
             
             # Limit to max_foods
             foods = foods[:max_foods]
             
             processing_time = int((time.time() - start_time) * 1000)
             
+            logger.info(
+                f"Parsed {len(foods)} foods, is_multi_food_plate={is_multi_food_plate}"
+            )
+            
             return FoodRecognitionResult(
                 foods=foods,
                 overall_confidence=overall_confidence,
+                is_multi_food_plate=is_multi_food_plate,
                 raw_response=raw_response,
                 provider=self.provider_name,
                 processing_time_ms=processing_time,
@@ -182,21 +232,25 @@ class OllamaFoodRecognition(FoodRecognitionService):
     
     def _parse_response(
         self, raw_response: str
-    ) -> tuple[list[RecognizedFood], float]:
-        """Parse LLaVA response into structured food data."""
+    ) -> tuple[list[RecognizedFood], float, bool]:
+        """Parse LLaVA response into structured food data.
+        
+        Returns:
+            tuple of (foods list, overall_confidence, is_multi_food_plate)
+        """
         
         # Try to extract JSON from response
         json_str = self._extract_json(raw_response)
         
         if not json_str:
             logger.warning("Could not extract JSON from response")
-            return [], 0.0
+            return [], 0.0, False
         
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse JSON: {e}")
-            return [], 0.0
+            return [], 0.0, False
         
         foods = []
         for item in data.get("foods", []):
@@ -218,6 +272,13 @@ class OllamaFoodRecognition(FoodRecognitionService):
                 except ValueError:
                     category = FoodCategory.UNKNOWN
                 
+                # Parse visible components for mixed dishes (MVP-3.4)
+                visible_components = None
+                if item.get("visible_components"):
+                    components = item.get("visible_components")
+                    if isinstance(components, list):
+                        visible_components = [str(c) for c in components if c]
+                
                 food = RecognizedFood(
                     label=item.get("label", "Unknown Food"),
                     confidence=float(item.get("confidence", 0.5)),
@@ -225,6 +286,7 @@ class OllamaFoodRecognition(FoodRecognitionService):
                     estimated_macros=macros,
                     category=category,
                     is_mixed_dish=bool(item.get("is_mixed_dish", False)),
+                    visible_components=visible_components,
                 )
                 foods.append(food)
                 
@@ -233,8 +295,9 @@ class OllamaFoodRecognition(FoodRecognitionService):
                 continue
         
         overall_confidence = float(data.get("overall_confidence", 0.5))
+        is_multi_food_plate = bool(data.get("is_multi_food_plate", len(foods) > 1))
         
-        return foods, overall_confidence
+        return foods, overall_confidence, is_multi_food_plate
     
     def _extract_json(self, text: str) -> str | None:
         """Extract JSON object from text response."""

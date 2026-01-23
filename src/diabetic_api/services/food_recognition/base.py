@@ -59,6 +59,9 @@ class RecognizedFood(BaseModel):
     is_mixed_dish: bool = Field(
         False, description="Whether this is a mixed/composite dish"
     )
+    visible_components: list[str] | None = Field(
+        None, description="Visible components for mixed dishes (MVP-3.4)"
+    )
     
     # For matching with nutrition database
     possible_usda_matches: list[str] = Field(
@@ -75,6 +78,9 @@ class FoodRecognitionResult(BaseModel):
     )
     overall_confidence: float = Field(
         ge=0.0, le=1.0, description="Overall confidence in recognition"
+    )
+    is_multi_food_plate: bool = Field(
+        False, description="Whether multiple distinct foods were detected (MVP-3.4)"
     )
     raw_response: str = Field(
         "", description="Raw response from the provider (for debugging)"
