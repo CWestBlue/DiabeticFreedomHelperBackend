@@ -20,6 +20,7 @@ async def lifespan(app: FastAPI):
     Handles startup and shutdown events.
     """
     from diabetic_api.core.scheduler import start_scheduler, stop_scheduler
+    from diabetic_api.db.unit_of_work import UnitOfWork
     
     # Startup
     settings = get_settings()
@@ -28,6 +29,22 @@ async def lifespan(app: FastAPI):
     
     MongoDB.connect(settings.mongo_uri, settings.db_name)
     print("✅ MongoDB connected")
+    
+    # Initialize database indexes
+    try:
+        db = MongoDB.get_database(settings.db_name)
+        uow = UnitOfWork(db)
+        
+        # Ensure scan_artifacts collection indexes (TTL, scan_id, etc.)
+        await uow.scan_artifacts.ensure_indexes()
+        print("✅ Scan artifacts indexes ensured")
+        
+        # Ensure GridFS indexes for efficient querying
+        await uow.gridfs.ensure_indexes()
+        print("✅ GridFS indexes ensured")
+        
+    except Exception as e:
+        print(f"⚠️ Failed to ensure indexes: {e}")
     
     # Start scheduler for automated sync
     scheduler = start_scheduler(settings)

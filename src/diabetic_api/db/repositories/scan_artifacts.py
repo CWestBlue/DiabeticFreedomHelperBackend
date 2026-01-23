@@ -6,6 +6,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 from diabetic_api.models.food_scan import ScanArtifact
+from diabetic_api.services.gridfs_storage import GridFSStorageService
 
 from .base import BaseRepository
 
@@ -243,3 +244,122 @@ class ScanArtifactRepository(BaseRepository[ScanArtifact]):
             "ttl_expires_at": {"$lt": datetime.utcnow()}
         })
         return result.deleted_count
+
+    # =========================================================================
+    # GridFS-integrated methods
+    # =========================================================================
+
+    async def store_artifact_with_data(
+        self,
+        gridfs: GridFSStorageService,
+        scan_id: str,
+        artifact_type: str,
+        data: bytes,
+        content_type: str,
+        width: int | None = None,
+        height: int | None = None,
+        bit_depth: int | None = None,
+        ttl_days: int = DEFAULT_ARTIFACT_TTL_DAYS,
+    ) -> str:
+        """
+        Store artifact binary data to GridFS and metadata to collection.
+        
+        This is the preferred method for storing artifacts as it:
+        1. Uploads binary data to GridFS
+        2. Stores metadata with GridFS URI reference
+        
+        Args:
+            gridfs: GridFS storage service instance
+            scan_id: Reference to parent scan
+            artifact_type: Type of artifact (rgb, depth_u16, confidence_u8)
+            data: Binary file data
+            content_type: MIME type
+            width: Image width (optional)
+            height: Image height (optional)
+            bit_depth: Bit depth for depth maps (optional)
+            ttl_days: Days until automatic deletion
+            
+        Returns:
+            Inserted metadata document ID
+        """
+        # Upload to GridFS first
+        storage_uri = await gridfs.upload_file(
+            data=data,
+            scan_id=scan_id,
+            artifact_type=artifact_type,
+            content_type=content_type,
+            width=width,
+            height=height,
+            bit_depth=bit_depth,
+            ttl_days=ttl_days,
+        )
+        
+        # Store metadata with GridFS URI reference
+        return await self.store_artifact(
+            scan_id=scan_id,
+            artifact_type=artifact_type,
+            storage_uri=storage_uri,
+            size_bytes=len(data),
+            content_type=content_type,
+            width=width,
+            height=height,
+            bit_depth=bit_depth,
+            ttl_days=ttl_days,
+        )
+
+    async def get_artifact_data(
+        self,
+        gridfs: GridFSStorageService,
+        scan_id: str,
+        artifact_type: str,
+    ) -> tuple[bytes, ScanArtifact] | None:
+        """
+        Retrieve artifact binary data and metadata.
+        
+        Args:
+            gridfs: GridFS storage service instance
+            scan_id: The scan identifier
+            artifact_type: Type of artifact (rgb, depth_u16, etc.)
+            
+        Returns:
+            Tuple of (binary_data, metadata) or None if not found
+        """
+        # Get metadata first
+        artifact = await self.get_artifact_by_type(scan_id, artifact_type)
+        if not artifact:
+            return None
+        
+        # Check if it's a GridFS URI
+        if not artifact.storage_uri.startswith("gridfs://"):
+            # Legacy non-GridFS artifact
+            return None
+        
+        # Download from GridFS
+        try:
+            data = await gridfs.download_by_uri(artifact.storage_uri)
+            return data, artifact
+        except Exception:
+            return None
+
+    async def delete_artifacts_for_scan_with_gridfs(
+        self,
+        gridfs: GridFSStorageService,
+        scan_id: str,
+    ) -> tuple[int, int]:
+        """
+        Delete all artifacts for a scan, including GridFS files.
+        
+        Args:
+            gridfs: GridFS storage service instance
+            scan_id: The scan identifier
+            
+        Returns:
+            Tuple of (metadata_deleted_count, gridfs_deleted_count)
+        """
+        # First delete GridFS files
+        gridfs_deleted = await gridfs.delete_scan_artifacts(scan_id)
+        
+        # Then delete metadata documents
+        metadata_deleted = await self.delete_artifacts_for_scan(scan_id)
+        
+        return metadata_deleted, gridfs_deleted

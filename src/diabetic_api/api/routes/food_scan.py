@@ -11,9 +11,12 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from diabetic_api.api.dependencies import UoWDep, get_uow
+from diabetic_api.db.unit_of_work import UnitOfWork
 from diabetic_api.models.food_scan import (
     DetectedFood,
     FoodCandidate,
@@ -222,6 +225,89 @@ def generate_scan_id(user_id: str) -> str:
 
 
 # =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+async def _store_scan_artifacts(
+    uow: UnitOfWork,
+    scan_id: str,
+    rgb_data: bytes,
+    depth_file: UploadFile | None,
+    depth_info: dict | None,
+    confidence_file: UploadFile | None,
+    intrinsics,
+) -> None:
+    """
+    Store scan artifacts to GridFS when user opts in.
+    
+    Args:
+        uow: Unit of Work for database access
+        scan_id: The scan identifier
+        rgb_data: RGB image bytes (already read)
+        depth_file: Depth map upload file (optional)
+        depth_info: Depth validation info (optional)
+        confidence_file: Confidence map upload file (optional)
+        intrinsics: Camera intrinsics for dimensions
+    """
+    try:
+        # Store RGB image
+        await uow.scan_artifacts.store_artifact_with_data(
+            gridfs=uow.gridfs,
+            scan_id=scan_id,
+            artifact_type="rgb",
+            data=rgb_data,
+            content_type="image/jpeg",
+            width=intrinsics.width,
+            height=intrinsics.height,
+        )
+        logger.info(f"Stored RGB artifact for scan {scan_id}: {len(rgb_data)} bytes")
+        
+        # Store depth map if provided
+        if depth_file is not None and depth_info is not None:
+            depth_data = await depth_file.read()
+            await depth_file.seek(0)  # Reset for any further processing
+            
+            content_type = (
+                "image/png" if depth_info.get("format") == "png" 
+                else "application/octet-stream"
+            )
+            
+            await uow.scan_artifacts.store_artifact_with_data(
+                gridfs=uow.gridfs,
+                scan_id=scan_id,
+                artifact_type="depth_u16",
+                data=depth_data,
+                content_type=content_type,
+                width=depth_info.get("width", intrinsics.width),
+                height=depth_info.get("height", intrinsics.height),
+                bit_depth=depth_info.get("bit_depth", 16),
+            )
+            logger.info(f"Stored depth artifact for scan {scan_id}: {len(depth_data)} bytes")
+        
+        # Store confidence map if provided
+        if confidence_file is not None:
+            confidence_data = await confidence_file.read()
+            await confidence_file.seek(0)  # Reset for any further processing
+            
+            await uow.scan_artifacts.store_artifact_with_data(
+                gridfs=uow.gridfs,
+                scan_id=scan_id,
+                artifact_type="confidence_u8",
+                data=confidence_data,
+                content_type="application/octet-stream",
+                width=intrinsics.width,
+                height=intrinsics.height,
+                bit_depth=8,
+            )
+            logger.info(f"Stored confidence artifact for scan {scan_id}: {len(confidence_data)} bytes")
+            
+    except Exception as e:
+        # Log error but don't fail the scan - artifact storage is optional
+        logger.error(f"Failed to store artifacts for scan {scan_id}: {e}")
+
+
+# =============================================================================
 # API Endpoints
 # =============================================================================
 
@@ -266,6 +352,7 @@ async def scan_food(
     confidence_u8: Annotated[
         UploadFile | None, File(description="Confidence map (PNG)")
     ] = None,
+    uow: UnitOfWork = Depends(get_uow),
 ) -> FoodScanResponse:
     """
     Process food scan with RGB + depth data.
@@ -609,6 +696,20 @@ async def scan_food(
                 for df in detected_foods
             ) or grams_est or 100.0
             
+            # -----------------------------------------------------------------
+            # Store artifacts to GridFS (if opted in)
+            # -----------------------------------------------------------------
+            if scan_request.opt_in_store_artifacts:
+                await _store_scan_artifacts(
+                    uow=uow,
+                    scan_id=scan_id,
+                    rgb_data=rgb_data,
+                    depth_file=depth_u16,
+                    depth_info=depth_info,
+                    confidence_file=confidence_u8,
+                    intrinsics=scan_request.intrinsics,
+                )
+            
             return FoodScanResponse(
                 scan_id=scan_id,
                 # MVP-3.4: Multi-food support
@@ -653,6 +754,18 @@ async def scan_food(
     # Fallback: Return mock response when recognition unavailable
     # -------------------------------------------------------------------------
     logger.info(f"Using fallback mock response for scan {scan_id}")
+    
+    # Store artifacts even in fallback case (if opted in)
+    if scan_request.opt_in_store_artifacts:
+        await _store_scan_artifacts(
+            uow=uow,
+            scan_id=scan_id,
+            rgb_data=rgb_data,
+            depth_file=depth_u16,
+            depth_info=depth_info,
+            confidence_file=confidence_u8,
+            intrinsics=scan_request.intrinsics,
+        )
     
     mock_candidate = FoodCandidate(
         canonical_food_id="fallback_001",
@@ -761,6 +874,132 @@ async def get_scan(scan_id: str) -> FoodScanResponse:
             details={"note": "Storage not yet implemented (MVP-2.2)"},
         ).model_dump(),
     )
+
+
+# =============================================================================
+# Artifact Retrieval Endpoints (GridFS Storage)
+# =============================================================================
+
+
+@router.get(
+    "/scan/{scan_id}/artifacts/{artifact_type}",
+    summary="Get scan artifact",
+    description="""
+    Retrieve a scan artifact (RGB image, depth map, or confidence map).
+    
+    **Artifact Types:**
+    - `rgb`: Original RGB image (JPEG)
+    - `depth_u16`: 16-bit depth map (PNG or raw bytes)
+    - `confidence_u8`: 8-bit confidence map
+    
+    **Note:** Artifacts are only available if the user opted in via
+    `opt_in_store_artifacts=true` during the scan.
+    """,
+    responses={
+        200: {
+            "description": "Artifact binary data",
+            "content": {
+                "image/jpeg": {},
+                "image/png": {},
+                "application/octet-stream": {},
+            },
+        },
+        404: {"description": "Artifact not found"},
+    },
+)
+async def get_scan_artifact(
+    scan_id: str,
+    artifact_type: str,
+    uow: UnitOfWork = Depends(get_uow),
+) -> Response:
+    """
+    Retrieve artifact binary data for a scan.
+    
+    Returns the raw binary data with appropriate Content-Type header.
+    """
+    # Validate artifact type
+    valid_types = {"rgb", "depth_u16", "confidence_u8"}
+    if artifact_type not in valid_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=FoodScanError(
+                error_code=ScanErrorCode.PROCESSING_ERROR,
+                message=f"Invalid artifact type: {artifact_type}",
+                details={"valid_types": list(valid_types)},
+            ).model_dump(),
+        )
+    
+    # Try to retrieve artifact
+    result = await uow.scan_artifacts.get_artifact_data(
+        gridfs=uow.gridfs,
+        scan_id=scan_id,
+        artifact_type=artifact_type,
+    )
+    
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=FoodScanError(
+                error_code=ScanErrorCode.PROCESSING_ERROR,
+                message=f"Artifact not found: {scan_id}/{artifact_type}",
+                details={
+                    "scan_id": scan_id,
+                    "artifact_type": artifact_type,
+                    "note": "Artifact may not exist or scan was not stored",
+                },
+            ).model_dump(),
+        )
+    
+    data, artifact = result
+    
+    logger.info(
+        f"Serving artifact {artifact_type} for scan {scan_id}: "
+        f"{len(data)} bytes"
+    )
+    
+    return Response(
+        content=data,
+        media_type=artifact.content_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{scan_id}_{artifact_type}"',
+            "X-Artifact-Type": artifact_type,
+            "X-Scan-Id": scan_id,
+        },
+    )
+
+
+@router.get(
+    "/scan/{scan_id}/artifacts",
+    summary="List scan artifacts",
+    description="List all available artifacts for a scan.",
+)
+async def list_scan_artifacts(
+    scan_id: str,
+    uow: UnitOfWork = Depends(get_uow),
+) -> dict:
+    """
+    List all artifacts available for a scan.
+    
+    Returns metadata about stored artifacts without the binary data.
+    """
+    artifacts = await uow.scan_artifacts.get_artifacts_for_scan(scan_id)
+    
+    return {
+        "scan_id": scan_id,
+        "artifacts": [
+            {
+                "artifact_type": a.artifact_type,
+                "content_type": a.content_type,
+                "size_bytes": a.size_bytes,
+                "width": a.width,
+                "height": a.height,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+                "ttl_expires_at": a.ttl_expires_at.isoformat() if a.ttl_expires_at else None,
+            }
+            for a in artifacts
+        ],
+        "count": len(artifacts),
+    }
 
 
 # =============================================================================
