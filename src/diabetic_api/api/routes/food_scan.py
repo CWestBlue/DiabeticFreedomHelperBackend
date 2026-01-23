@@ -1141,12 +1141,7 @@ async def get_meal_estimates(
             scan_id=meal.scan_id,
             user_id=meal.user_id,
             food_label=meal.food_label,
-            macros=Macros(
-                carbs=meal.macros.get("carbs", 0) if meal.macros else 0,
-                protein=meal.macros.get("protein", 0) if meal.macros else 0,
-                fat=meal.macros.get("fat", 0) if meal.macros else 0,
-                fiber=meal.macros.get("fiber", 0) if meal.macros else 0,
-            ),
+            macros=meal.macros if meal.macros else Macros(carbs=0, protein=0, fat=0, fiber=0),
             confidence=meal.confidence,
             created_at=meal.created_at,
         )
