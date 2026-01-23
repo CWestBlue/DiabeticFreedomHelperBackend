@@ -1,6 +1,6 @@
 """Unit of Work pattern for managing repository access."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -9,7 +9,10 @@ from .repositories.meal_estimates import MealEstimateRepository
 from .repositories.pump_data import PumpDataRepository
 from .repositories.scan_artifacts import ScanArtifactRepository
 from .repositories.sessions import SessionRepository
-from diabetic_api.services.gridfs_storage import GridFSStorageService
+
+# Use TYPE_CHECKING to avoid circular import at runtime
+if TYPE_CHECKING:
+    from diabetic_api.services.gridfs_storage import GridFSStorageService
 
 
 class UnitOfWork:
@@ -38,7 +41,7 @@ class UnitOfWork:
         self._meal_estimates: MealEstimateRepository | None = None
         self._food_scans: FoodScanRepository | None = None
         self._scan_artifacts: ScanArtifactRepository | None = None
-        self._gridfs: GridFSStorageService | None = None
+        self._gridfs: "GridFSStorageService | None" = None
 
     @property
     def pump_data(self) -> PumpDataRepository:
@@ -110,7 +113,7 @@ class UnitOfWork:
         return self._scan_artifacts
 
     @property
-    def gridfs(self) -> GridFSStorageService:
+    def gridfs(self) -> "GridFSStorageService":
         """
         Get GridFS storage service (lazy loaded).
         
@@ -121,6 +124,8 @@ class UnitOfWork:
             GridFSStorageService instance
         """
         if self._gridfs is None:
+            # Lazy import to avoid circular dependency
+            from diabetic_api.services.gridfs_storage import GridFSStorageService
             self._gridfs = GridFSStorageService(self._db)
         return self._gridfs
 

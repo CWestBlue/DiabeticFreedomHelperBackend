@@ -1,14 +1,17 @@
 """Repository for ScanArtifact collection (images/depth data with TTL)."""
 
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 from diabetic_api.models.food_scan import ScanArtifact
-from diabetic_api.services.gridfs_storage import GridFSStorageService
 
 from .base import BaseRepository
+
+# Use TYPE_CHECKING to avoid circular import at runtime
+if TYPE_CHECKING:
+    from diabetic_api.services.gridfs_storage import GridFSStorageService
 
 # Default TTL for artifacts (7 days)
 DEFAULT_ARTIFACT_TTL_DAYS = 7
@@ -251,7 +254,7 @@ class ScanArtifactRepository(BaseRepository[ScanArtifact]):
 
     async def store_artifact_with_data(
         self,
-        gridfs: GridFSStorageService,
+        gridfs: "GridFSStorageService",
         scan_id: str,
         artifact_type: str,
         data: bytes,
@@ -309,7 +312,7 @@ class ScanArtifactRepository(BaseRepository[ScanArtifact]):
 
     async def get_artifact_data(
         self,
-        gridfs: GridFSStorageService,
+        gridfs: "GridFSStorageService",
         scan_id: str,
         artifact_type: str,
     ) -> tuple[bytes, ScanArtifact] | None:
@@ -343,7 +346,7 @@ class ScanArtifactRepository(BaseRepository[ScanArtifact]):
 
     async def delete_artifacts_for_scan_with_gridfs(
         self,
-        gridfs: GridFSStorageService,
+        gridfs: "GridFSStorageService",
         scan_id: str,
     ) -> tuple[int, int]:
         """
