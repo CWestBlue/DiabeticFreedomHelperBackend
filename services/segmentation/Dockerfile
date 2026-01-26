@@ -40,7 +40,7 @@ RUN pip install --no-cache-dir git+https://github.com/CASIA-IVA-Lab/FastSAM.git
 RUN pip install --no-cache-dir ultralytics
 
 # Copy project files
-COPY pyproject.toml .
+COPY pyproject.toml README.md ./
 COPY src/ src/
 
 # Install the application
