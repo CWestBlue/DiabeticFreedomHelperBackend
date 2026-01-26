@@ -1,21 +1,21 @@
-name: Build and Push API Service
+name: Build and Push Segmentation Service
 
 on:
   push:
     branches: [main]
     paths:
-      - 'services/api/**'
-      - '.github/workflows/build.yml'
+      - 'services/segmentation/**'
+      - '.github/workflows/build-segmentation.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'services/api/**'
-      - '.github/workflows/build.yml'
+      - 'services/segmentation/**'
+      - '.github/workflows/build-segmentation.yml'
   workflow_dispatch:  # Manual trigger
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository }}-segmentation
 
 jobs:
   build-and-push:
@@ -48,7 +48,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./services/api
+          context: ./services/segmentation
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -56,13 +56,12 @@ jobs:
       - name: Summary
         if: github.event_name != 'pull_request'
         run: |
-          echo "## 🚀 Image Published!" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Segmentation Service Published!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Deploy to TrueNAS" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "docker compose up -d" >> $GITHUB_STEP_SUMMARY
+          echo "docker compose -f docker-compose.truenas.yml up -d segmentation" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-

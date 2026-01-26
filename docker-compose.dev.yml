@@ -4,7 +4,8 @@
 services:
   api:
     build:
-      context: .
+      context: ./services/api
+      dockerfile: Dockerfile
       target: builder
     container_name: diabetic-api-dev
     ports:
@@ -23,7 +24,7 @@ services:
       # App
       - DEBUG=true
     volumes:
-      - ./src:/app/src:ro
+      - ./services/api/src:/app/src:ro
     command: uv run uvicorn diabetic_api.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       mongo:

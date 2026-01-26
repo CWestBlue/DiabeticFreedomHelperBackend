@@ -77,7 +77,13 @@ class Settings(BaseSettings):
     usda_api_key: str = ""
     usda_api_base_url: str = "https://api.nal.usda.gov/fdc/v1"
     usda_enabled: bool = True  # Enable USDA nutrition lookup
-    
+
+    # Segmentation Service (MVP-2.3)
+    segmentation_enabled: bool = False  # Feature flag - set to True when service is deployed
+    segmentation_service_url: str = "http://localhost:8001"
+    segmentation_timeout: float = 30.0  # Timeout for segmentation requests
+    segmentation_confidence_threshold: float = 0.5  # Min confidence for masks
+
     # App
     debug: bool = False
     app_name: str = "Diabetic AI API"

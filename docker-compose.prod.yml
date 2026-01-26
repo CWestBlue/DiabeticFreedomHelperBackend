@@ -1,5 +1,5 @@
 # Docker Compose for Production (TrueNAS)
-# Pulls pre-built image from GitHub Container Registry
+# Pulls pre-built images from GitHub Container Registry
 #
 # Usage:
 #   1. Create .env file with your secrets
@@ -7,6 +7,9 @@
 #   3. To update: docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d
 
 services:
+  # ===========================================
+  # Main API Service
+  # ===========================================
   api:
     image: ghcr.io/cwestblue/diabetic-api:latest
     container_name: diabetic-api
@@ -14,7 +17,7 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     environment:
-      # MongoDB Atlas
+      # MongoDB
       - MONGO_URI=${MONGO_URI}
       - DB_NAME=${DB_NAME:-Diabetes}
       # LLM Provider
@@ -24,8 +27,17 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      # Food Recognition (Ollama/LLaVA)
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://truenas.local:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llava:13b}
+      # Segmentation Service
+      - SEGMENTATION_ENABLED=${SEGMENTATION_ENABLED:-true}
+      - SEGMENTATION_SERVICE_URL=${SEGMENTATION_SERVICE_URL:-http://segmentation:8001}
       # App
       - DEBUG=${DEBUG:-false}
+    depends_on:
+      segmentation:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -38,7 +50,57 @@ services:
           memory: 1G
         reservations:
           memory: 256M
+    networks:
+      - diabetic-network
     labels:
       # Watchtower auto-update (optional)
       - "com.centurylinklabs.watchtower.enable=true"
+
+  # ===========================================
+  # Segmentation Service (FastSAM + GPU)
+  # ===========================================
+  segmentation:
+    image: ghcr.io/cwestblue/diabetic-api-segmentation:latest
+    container_name: diabetic-segmentation
+    restart: unless-stopped
+    ports:
+      - "${SEGMENTATION_PORT:-8001}:8001"
+    environment:
+      - SEGMENTATION_HOST=0.0.0.0
+      - SEGMENTATION_PORT=8001
+      - SEGMENTATION_DEVICE=cuda
+      - SEGMENTATION_MODEL_NAME=${SEGMENTATION_MODEL_NAME:-FastSAM-s}
+      - SEGMENTATION_MODEL_PATH=/app/models
+      - SEGMENTATION_GPU_MEMORY_LIMIT_GB=${SEGMENTATION_GPU_MEMORY_LIMIT_GB:-2.0}
+      - SEGMENTATION_CONFIDENCE_THRESHOLD=${SEGMENTATION_CONFIDENCE_THRESHOLD:-0.5}
+      - SEGMENTATION_LOG_LEVEL=${SEGMENTATION_LOG_LEVEL:-INFO}
+    volumes:
+      - segmentation_models:/app/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 4G
+    networks:
+      - diabetic-network
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+volumes:
+  segmentation_models:
+    driver: local
+
+networks:
+  diabetic-network:
+    driver: bridge
 
