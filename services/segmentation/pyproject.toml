@@ -12,7 +12,7 @@ dependencies = [
     # Image processing
     "pillow>=10.0.0",
     "opencv-python-headless>=4.8.0",
-    "numpy>=1.24.0",
+    "numpy>=1.24.0,<2",  # Pin to numpy 1.x for PyTorch compatibility
     # FastSAM and PyTorch
     # Note: torch with CUDA is installed via pip in Dockerfile for GPU support
     # fastsam is installed from git in Dockerfile
