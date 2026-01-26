@@ -36,12 +36,9 @@ RUN pip install --no-cache-dir \
     torchvision==0.16.0+cu121 \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Install ultralytics FIRST with compatible version (before FastSAM)
-# Pin to 8.0.x which has the ultralytics.yolo module that FastSAM expects
-RUN pip install --no-cache-dir "ultralytics==8.0.196"
-
-# Install FastSAM from GitHub
-RUN pip install --no-cache-dir git+https://github.com/CASIA-IVA-Lab/FastSAM.git
+# Install ultralytics - FastSAM models are YOLO-compatible and load directly
+# No need for separate fastsam package
+RUN pip install --no-cache-dir "ultralytics>=8.0.0"
 
 # Copy project files
 COPY pyproject.toml README.md ./

@@ -1,4 +1,4 @@
-"""FastSAM model wrapper for food image segmentation."""
+"""FastSAM model wrapper for food image segmentation using ultralytics."""
 
 import base64
 import io
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class FastSAMSegmenter:
-    """Wrapper for FastSAM segmentation model."""
+    """Wrapper for FastSAM segmentation model using ultralytics."""
 
     def __init__(self) -> None:
         """Initialize the segmenter (model loaded lazily)."""
@@ -46,43 +46,44 @@ class FastSAMSegmenter:
 
         # Determine device
         if settings.device == "cuda" and torch.cuda.is_available():
-            self._device = torch.device("cuda")
+            self._device = "cuda"
             logger.info(f"Using GPU: {torch.cuda.get_device_name(0)}")
 
             # Set memory limit if specified
             if settings.gpu_memory_limit_gb > 0:
-                torch.cuda.set_per_process_memory_fraction(
-                    settings.gpu_memory_limit_gb / torch.cuda.get_device_properties(0).total_memory * 1e9
-                )
+                try:
+                    total_mem = torch.cuda.get_device_properties(0).total_memory
+                    fraction = min(1.0, (settings.gpu_memory_limit_gb * 1e9) / total_mem)
+                    torch.cuda.set_per_process_memory_fraction(fraction)
+                except Exception as e:
+                    logger.warning(f"Could not set GPU memory limit: {e}")
         else:
-            self._device = torch.device("cpu")
+            self._device = "cpu"
             logger.info("Using CPU")
 
-        # Import FastSAM (lazy import to avoid loading until needed)
+        # Import and load model using ultralytics directly
         try:
-            from fastsam import FastSAM, FastSAMPrompt
+            from ultralytics import YOLO
 
-            # Determine model file
+            # Determine model file - FastSAM models are YOLO-compatible
             model_file = "FastSAM-s.pt" if "s" in settings.model_name.lower() else "FastSAM-x.pt"
             model_path = Path(settings.model_path) / model_file
 
-            # Download model if not present
+            # If model doesn't exist locally, ultralytics will download it
             if not model_path.exists():
-                logger.info(f"Model not found at {model_path}, will download on first use")
+                logger.info(f"Model not found at {model_path}, will download")
                 model_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Load model
-            self._model = FastSAM(str(model_path))
-            self._fastsam_prompt = FastSAMPrompt
+                # Use just the model name - ultralytics will download it
+                self._model = YOLO(model_file)
+            else:
+                self._model = YOLO(str(model_path))
 
             load_time = time.time() - start_time
             logger.info(f"Model loaded in {load_time:.2f}s")
 
-        except ImportError as e:
-            logger.error(f"Failed to import FastSAM: {e}")
-            raise RuntimeError(
-                "FastSAM not installed. Install with: pip install fastsam"
-            ) from e
+        except Exception as e:
+            logger.error(f"Failed to load FastSAM model: {e}")
+            raise RuntimeError(f"Failed to load FastSAM: {e}") from e
 
     def segment(
         self,
@@ -95,7 +96,7 @@ class FastSAMSegmenter:
 
         Args:
             image_data: Raw image bytes (PNG or JPEG)
-            prompt: Optional text prompt to guide segmentation
+            prompt: Optional text prompt (not used in basic FastSAM, kept for API compatibility)
             return_visualization: Whether to return a visualization image
 
         Returns:
@@ -111,35 +112,36 @@ class FastSAMSegmenter:
         image_np = np.array(image)
         height, width = image_np.shape[:2]
 
-        # Run FastSAM inference
+        # Run FastSAM inference using ultralytics
         results = self._model(
             image_np,
             device=self._device,
             retina_masks=True,
             conf=settings.confidence_threshold,
             iou=settings.iou_threshold,
+            verbose=False,
         )
 
-        # Process results with FastSAMPrompt
-        prompt_process = self._fastsam_prompt(image_np, results, device=self._device)
-
-        # Get masks - use everything or text prompt
-        if prompt:
-            masks = prompt_process.text_prompt(text=prompt)
-        else:
-            masks = prompt_process.everything_prompt()
-
-        # Convert masks to our format
+        # Process results
         mask_results = []
-        if masks is not None and len(masks) > 0:
-            # Ensure masks is numpy array
-            if torch.is_tensor(masks):
-                masks = masks.cpu().numpy()
+        
+        if results and len(results) > 0 and results[0].masks is not None:
+            masks_data = results[0].masks.data  # Tensor of shape (N, H, W)
+            
+            # Convert to numpy if tensor
+            if torch.is_tensor(masks_data):
+                masks_np = masks_data.cpu().numpy()
+            else:
+                masks_np = masks_data
 
-            for i, mask in enumerate(masks[: settings.max_masks]):
+            for i, mask in enumerate(masks_np[: settings.max_masks]):
                 # Ensure mask is 2D
                 if mask.ndim == 3:
                     mask = mask.squeeze()
+
+                # Resize mask to original image size if needed
+                if mask.shape != (height, width):
+                    mask = cv2.resize(mask.astype(np.float32), (width, height))
 
                 # Convert to binary mask
                 binary_mask = (mask > 0.5).astype(np.uint8) * 255
@@ -164,12 +166,20 @@ class FastSAMSegmenter:
                 # Area in pixels
                 area = int(np.sum(binary_mask > 0))
 
+                # Skip very small masks (noise)
+                if area < 100:
+                    continue
+
                 # Encode mask as PNG
                 mask_png = cv2.imencode(".png", binary_mask)[1].tobytes()
                 mask_base64 = base64.b64encode(mask_png).decode("utf-8")
 
-                # Calculate confidence (use area ratio as proxy if not provided)
-                confidence = min(1.0, area / (width * height * 0.5))
+                # Get confidence from results if available
+                if results[0].boxes is not None and i < len(results[0].boxes.conf):
+                    confidence = float(results[0].boxes.conf[i])
+                else:
+                    # Use area ratio as proxy confidence
+                    confidence = min(1.0, area / (width * height * 0.3))
 
                 mask_results.append({
                     "mask_base64": mask_base64,
@@ -257,7 +267,7 @@ class FastSAMSegmenter:
             return {
                 "gpu_available": False,
                 "gpu_name": None,
-                "gpu_memory_used_mb": None,
+                "gpu_memory_used_mb": 0.0,
             }
 
         return {
