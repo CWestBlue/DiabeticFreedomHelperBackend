@@ -20,8 +20,9 @@ FROM python:3.12-slim AS production
 
 WORKDIR /app
 
-# Install Chromium and ChromeDriver for Selenium (CareLink sync)
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Chromium and ChromeDriver for Selenium (CareLink sync)
     chromium \
     chromium-driver \
     # Required for Chromium
@@ -40,6 +41,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libcairo2 \
     fonts-liberation \
+    # Required for OpenCV (MVP-2.5 volume computation)
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
