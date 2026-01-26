@@ -6,11 +6,6 @@ on:
     paths:
       - 'services/segmentation/**'
       - '.github/workflows/build-segmentation.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'services/segmentation/**'
-      - '.github/workflows/build-segmentation.yml'
   workflow_dispatch:  # Manual trigger
 
 env:
@@ -56,7 +51,7 @@ jobs:
       - name: Summary
         if: github.event_name != 'pull_request'
         run: |
-          echo "## 🚀 Segmentation Service Published!" >> $GITHUB_STEP_SUMMARY
+          echo "## Segmentation Service Published!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

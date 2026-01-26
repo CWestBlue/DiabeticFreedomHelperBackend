@@ -6,11 +6,6 @@ on:
     paths:
       - 'services/api/**'
       - '.github/workflows/build.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'services/api/**'
-      - '.github/workflows/build.yml'
   workflow_dispatch:  # Manual trigger
 
 env:
