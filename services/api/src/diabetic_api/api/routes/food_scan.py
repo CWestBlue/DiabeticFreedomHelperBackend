@@ -28,8 +28,10 @@ from diabetic_api.models.food_scan import (
     Macros,
     ScanErrorCode,
     ScanQuality,
+    SegmentationResult,
     UncertaintyReason,
 )
+from diabetic_api.core.config import get_settings
 from diabetic_api.services.food_recognition import (
     FoodRecognitionError,
     get_food_recognition_service,
@@ -39,6 +41,7 @@ from diabetic_api.services.nutrition_lookup import (
     NutritionLookupError,
 )
 from diabetic_api.services.confidence_engine import get_confidence_engine
+from diabetic_api.services.segmentation import get_segmentation_client
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -469,12 +472,74 @@ async def scan_food(
     )
     
     # -------------------------------------------------------------------------
-    # Step 6: Food Recognition via LLaVA/Ollama (MVP-2.4)
+    # Step 6: Read RGB image
     # -------------------------------------------------------------------------
-    # Read RGB image for recognition
     rgb_data = await rgb.read()
     await rgb.seek(0)
     
+    # -------------------------------------------------------------------------
+    # Step 6a: Segmentation via FastSAM (MVP-2.3) - Feature flagged
+    # -------------------------------------------------------------------------
+    settings = get_settings()
+    segmentation_result: SegmentationResult | None = None
+    segmentation_time_ms: int | None = None
+    
+    if settings.segmentation_enabled:
+        try:
+            segmentation_client = get_segmentation_client()
+            
+            # Check health first
+            is_seg_healthy = await segmentation_client.is_healthy()
+            if not is_seg_healthy:
+                logger.warning(
+                    "Segmentation service unhealthy, skipping segmentation",
+                    extra={"scan_id": scan_id},
+                )
+            else:
+                # Run segmentation
+                segmentation_result = await segmentation_client.segment(
+                    image_data=rgb_data,
+                    prompt="food on plate",  # Guide segmentation toward food
+                    return_visualization=scan_request.opt_in_store_artifacts,
+                )
+                segmentation_time_ms = segmentation_result.processing_time_ms
+                
+                logger.info(
+                    "Segmentation complete",
+                    extra={
+                        "scan_id": scan_id,
+                        "masks_found": len(segmentation_result.masks),
+                        "processing_time_ms": segmentation_time_ms,
+                        "model_version": segmentation_result.model_version,
+                    },
+                )
+                
+                # Store segmentation mask artifact if opted in
+                if scan_request.opt_in_store_artifacts and segmentation_result.visualization_base64:
+                    import base64
+                    vis_data = base64.b64decode(segmentation_result.visualization_base64)
+                    await uow.scan_artifacts.store_artifact_with_data(
+                        gridfs=uow.gridfs,
+                        scan_id=scan_id,
+                        artifact_type="segmentation_mask",
+                        data=vis_data,
+                        content_type="image/png",
+                        width=segmentation_result.image_width,
+                        height=segmentation_result.image_height,
+                    )
+                    logger.info(f"Stored segmentation visualization for scan {scan_id}")
+                    
+        except Exception as e:
+            logger.warning(
+                f"Segmentation failed, continuing without: {e}",
+                extra={"scan_id": scan_id},
+            )
+    else:
+        logger.debug("Segmentation disabled via feature flag")
+    
+    # -------------------------------------------------------------------------
+    # Step 7: Food Recognition via LLaVA/Ollama (MVP-2.4)
+    # -------------------------------------------------------------------------
     # Check if food recognition is enabled (default: True)
     use_food_recognition = os.getenv("FOOD_RECOGNITION_ENABLED", "true").lower() == "true"
     
@@ -742,6 +807,11 @@ async def scan_food(
                     "detected_foods_count": len(detected_foods),
                     "confidence_factors": confidence_result.factors.to_dict(),
                     "macro_variance": f"±{confidence_result.macro_variance * 100:.0f}%",
+                    # Segmentation info (MVP-2.3)
+                    "segmentation_enabled": settings.segmentation_enabled,
+                    "segmentation_time_ms": segmentation_time_ms,
+                    "segmentation_masks_count": len(segmentation_result.masks) if segmentation_result else None,
+                    "segmentation_provider": segmentation_result.model_version if segmentation_result else None,
                 } if scan_request.opt_in_store_artifacts else None,
                 processed_at=datetime.now(UTC),
             )
@@ -818,6 +888,9 @@ async def scan_food(
             "validation": "passed",
             "depth_info": depth_info,
             "note": "Food recognition service unavailable, using fallback",
+            "segmentation_enabled": settings.segmentation_enabled,
+            "segmentation_time_ms": segmentation_time_ms,
+            "segmentation_masks_count": len(segmentation_result.masks) if segmentation_result else None,
         } if scan_request.opt_in_store_artifacts else None,
         processed_at=datetime.now(UTC),
     )
@@ -850,6 +923,51 @@ async def check_recognition_health() -> dict:
             "status": "error",
             "provider": "unknown",
             "available": False,
+            "error": str(e),
+        }
+
+
+@router.get(
+    "/segmentation/health",
+    summary="Check segmentation service health",
+    description="Check if the segmentation service (FastSAM) is available.",
+)
+async def check_segmentation_health() -> dict:
+    """
+    Check if the segmentation service is healthy and available.
+    
+    Returns:
+        dict with status, model_loaded, gpu_available, and model information
+    """
+    settings = get_settings()
+    
+    if not settings.segmentation_enabled:
+        return {
+            "status": "disabled",
+            "enabled": False,
+            "message": "Segmentation is disabled via feature flag (SEGMENTATION_ENABLED=false)",
+        }
+    
+    try:
+        client = get_segmentation_client()
+        health = await client.health_check()
+        
+        return {
+            "status": health.get("status", "unknown"),
+            "enabled": True,
+            "model_loaded": health.get("model_loaded", False),
+            "gpu_available": health.get("gpu_available", False),
+            "gpu_name": health.get("gpu_name"),
+            "gpu_memory_used_mb": health.get("gpu_memory_used_mb"),
+            "model_version": health.get("model_version", "unknown"),
+        }
+    except Exception as e:
+        logger.error(f"Segmentation health check failed: {e}")
+        return {
+            "status": "error",
+            "enabled": True,
+            "model_loaded": False,
+            "gpu_available": False,
             "error": str(e),
         }
 

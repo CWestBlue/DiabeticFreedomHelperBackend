@@ -1,25 +1,66 @@
-# Docker Compose override for TrueNAS deployment
-# Usage: docker-compose -f docker-compose.yml -f docker-compose.truenas.yml up -d
+# Unified Docker Compose for TrueNAS deployment
+# Orchestrates all services: Main API, Segmentation Service
 #
-# This override:
-#   - Removes the bundled MongoDB (use external)
-#   - Adds container labels for Traefik/reverse proxy
-#   - Sets production-ready restart policies
+# Usage:
+#   docker-compose -f docker-compose.truenas.yml up --build -d
+#
+# Requirements:
+#   - NVIDIA Container Toolkit installed on host
+#   - External MongoDB accessible
+#   - External Ollama service running (for LLaVA)
+#
+# GPU Memory Allocation:
+#   - Segmentation (FastSAM): ~2GB
+#   - Ollama (LLaVA): ~5-6GB
+#   - Total RTX 3070: 8GB
 
 services:
+  # ===========================================
+  # Main API Service
+  # ===========================================
   api:
-    # Override to remove mongo dependency (use external MongoDB)
-    depends_on: []
-    
-    # Production labels (uncomment for Traefik)
-    # labels:
-    #   - "traefik.enable=true"
-    #   - "traefik.http.routers.diabetic-api.rule=Host(`diabetic.local`)"
-    #   - "traefik.http.services.diabetic-api.loadbalancer.server.port=8000"
-    
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    container_name: diabetic-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      # MongoDB (external)
+      - MONGO_URI=${MONGO_URI:-mongodb://truenas.local:27017}
+      - DB_NAME=${DB_NAME:-diabetic_db}
+      # LLM Provider
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
+      # LangSmith Tracing
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-false}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY:-}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-DiabeticAIChat}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT:-https://api.smith.langchain.com}
+      # Food Recognition (Ollama/LLaVA)
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://truenas.local:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llava:13b}
+      # Segmentation Service
+      - SEGMENTATION_ENABLED=${SEGMENTATION_ENABLED:-true}
+      - SEGMENTATION_SERVICE_URL=${SEGMENTATION_SERVICE_URL:-http://segmentation:8001}
+      # App
+      - DEBUG=${DEBUG:-false}
+    depends_on:
+      segmentation:
+        condition: service_healthy
     restart: always
-    
-    # Resource limits (adjust for your TrueNAS specs)
+    networks:
+      - diabetic-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     deploy:
       resources:
         limits:
@@ -27,15 +68,52 @@ services:
         reservations:
           memory: 256M
 
-  # Disable bundled MongoDB - use external
-  mongo:
-    profiles:
-      - disabled
+  # ===========================================
+  # Segmentation Service (FastSAM + GPU)
+  # ===========================================
+  segmentation:
+    build:
+      context: ./services/segmentation
+      dockerfile: Dockerfile
+    container_name: diabetic-segmentation
+    ports:
+      - "${SEGMENTATION_PORT:-8001}:8001"
+    environment:
+      - SEGMENTATION_HOST=0.0.0.0
+      - SEGMENTATION_PORT=8001
+      - SEGMENTATION_DEVICE=cuda
+      - SEGMENTATION_MODEL_NAME=${SEGMENTATION_MODEL_NAME:-FastSAM-s}
+      - SEGMENTATION_MODEL_PATH=/app/models
+      - SEGMENTATION_GPU_MEMORY_LIMIT_GB=${SEGMENTATION_GPU_MEMORY_LIMIT_GB:-2.0}
+      - SEGMENTATION_CONFIDENCE_THRESHOLD=${SEGMENTATION_CONFIDENCE_THRESHOLD:-0.5}
+      - SEGMENTATION_LOG_LEVEL=${SEGMENTATION_LOG_LEVEL:-INFO}
+    volumes:
+      # Persist model weights
+      - segmentation_models:/app/models
+    restart: always
+    networks:
+      - diabetic-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # Allow time for model download on first run
+    # GPU access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 4G
+
+volumes:
+  segmentation_models:
+    driver: local
 
 networks:
   diabetic-network:
     driver: bridge
-    # Uncomment to use existing network on TrueNAS
-    # external: true
-    # name: truenas-apps
-

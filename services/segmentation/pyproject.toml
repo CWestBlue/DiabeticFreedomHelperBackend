@@ -1,0 +1,51 @@
+[project]
+name = "segmentation-api"
+version = "1.0.0"
+description = "FastSAM-based food image segmentation service"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    # Image processing
+    "pillow>=10.0.0",
+    "opencv-python-headless>=4.8.0",
+    "numpy>=1.24.0",
+    # FastSAM and PyTorch
+    # Note: torch with CUDA is installed via pip in Dockerfile for GPU support
+    # fastsam is installed from git in Dockerfile
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "ruff>=0.8.0",
+]
+
+# CPU-only dependencies (for local development without GPU)
+cpu = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/segmentation_api"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

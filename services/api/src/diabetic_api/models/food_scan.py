@@ -257,6 +257,42 @@ class DebugInfo(BaseModel):
     depth_valid_ratio: float | None = Field(None, description="Ratio of valid depth pixels")
     plane_fit_inliers: int | None = Field(None, description="Number of plane fit inliers")
     plane_fit_rmse: float | None = Field(None, description="Plane fit RMSE")
+    segmentation_masks_count: int | None = Field(None, description="Number of segmentation masks")
+    segmentation_provider: str | None = Field(None, description="Segmentation service provider")
+
+
+# =============================================================================
+# Segmentation Models (MVP-2.3)
+# =============================================================================
+
+
+class SegmentationMask(BaseModel):
+    """A single segmentation mask for a detected region."""
+
+    mask_base64: str = Field(..., description="Base64-encoded PNG mask image")
+    bbox: tuple[int, int, int, int] = Field(
+        ..., description="Bounding box as (x, y, width, height)"
+    )
+    confidence: Annotated[float, Field(ge=0, le=1)] = Field(
+        ..., description="Confidence score (0-1)"
+    )
+    area_pixels: int = Field(..., ge=0, description="Number of pixels in the mask")
+    centroid: tuple[int, int] = Field(..., description="Center point of mask (x, y)")
+
+
+class SegmentationResult(BaseModel):
+    """Result from the segmentation service."""
+
+    masks: list[SegmentationMask] = Field(
+        default_factory=list, description="List of detected segmentation masks"
+    )
+    processing_time_ms: int = Field(..., description="Segmentation processing time in ms")
+    image_width: int = Field(..., description="Width of input image")
+    image_height: int = Field(..., description="Height of input image")
+    model_version: str = Field(..., description="Segmentation model version")
+    visualization_base64: str | None = Field(
+        None, description="Optional visualization image with masks overlaid"
+    )
 
 
 class FoodScanResponse(BaseModel):

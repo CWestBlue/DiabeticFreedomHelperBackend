@@ -27,6 +27,9 @@ AI-powered diabetic data API built with FastAPI, LangGraph, and MongoDB.
 # Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# Navigate to API service
+cd services/api
+
 # Install dependencies
 uv sync
 
@@ -126,16 +129,31 @@ Adjust in `docker-compose.truenas.yml` if needed.
 
 ```
 backend/
-├── src/diabetic_api/
-│   ├── main.py              # FastAPI app entry
-│   ├── core/                # Config, settings
-│   ├── api/                 # Routes, dependencies
-│   ├── services/            # Business logic
-│   ├── db/                  # MongoDB, repositories, UoW
-│   ├── agents/              # LangGraph agents
-│   ├── models/              # Pydantic schemas
-│   └── utils/               # Helpers
-└── tests/                   # Test suite
+├── services/
+│   ├── api/                           # Main Diabetic AI API
+│   │   ├── src/diabetic_api/
+│   │   │   ├── main.py                # FastAPI app entry
+│   │   │   ├── core/                  # Config, settings
+│   │   │   ├── api/                   # Routes, dependencies
+│   │   │   ├── services/              # Business logic
+│   │   │   ├── db/                    # MongoDB, repositories, UoW
+│   │   │   ├── agents/                # LangGraph agents
+│   │   │   ├── models/                # Pydantic schemas
+│   │   │   └── utils/                 # Helpers
+│   │   ├── tests/                     # Test suite
+│   │   ├── Dockerfile
+│   │   └── pyproject.toml
+│   │
+│   └── segmentation/                  # FastSAM Segmentation Service
+│       ├── src/segmentation_api/
+│       ├── tests/
+│       ├── Dockerfile
+│       └── pyproject.toml
+│
+├── shared/                            # Shared utilities (future)
+├── docs/                              # API documentation
+├── docker-compose.yml                 # Development compose
+└── docker-compose.truenas.yml         # Production compose
 ```
 
 ## API Endpoints
@@ -197,6 +215,9 @@ Routes → Services → UnitOfWork → Repositories → MongoDB
 ## Development
 
 ```bash
+# Navigate to API service
+cd services/api
+
 # Run tests
 uv run pytest
 

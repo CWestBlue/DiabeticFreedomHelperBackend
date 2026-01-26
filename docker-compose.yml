@@ -6,7 +6,9 @@
 
 services:
   api:
-    build: .
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
     container_name: diabetic-api
     ports:
       - "${API_PORT:-8000}:8000"
