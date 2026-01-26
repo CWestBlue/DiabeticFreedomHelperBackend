@@ -1,8 +1,8 @@
 # Segmentation Service Dockerfile with CUDA support for FastSAM
 # Requires NVIDIA Container Toolkit on the host
 
-# Use NVIDIA CUDA base image with Python
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04 AS base
+# Use NVIDIA CUDA base image with Python (updated to non-deprecated version)
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04 AS base
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -27,17 +27,21 @@ WORKDIR /app
 # Create models directory
 RUN mkdir -p /app/models
 
+# Pin numpy<2 to avoid compatibility issues with PyTorch
+RUN pip install --no-cache-dir "numpy<2"
+
 # Install PyTorch with CUDA support
 RUN pip install --no-cache-dir \
     torch==2.1.0+cu121 \
     torchvision==0.16.0+cu121 \
     --index-url https://download.pytorch.org/whl/cu121
 
+# Install ultralytics FIRST with compatible version (before FastSAM)
+# Pin to 8.0.x which has the ultralytics.yolo module that FastSAM expects
+RUN pip install --no-cache-dir "ultralytics==8.0.196"
+
 # Install FastSAM from GitHub
 RUN pip install --no-cache-dir git+https://github.com/CASIA-IVA-Lab/FastSAM.git
-
-# Install ultralytics (required by FastSAM)
-RUN pip install --no-cache-dir ultralytics
 
 # Copy project files
 COPY pyproject.toml README.md ./
