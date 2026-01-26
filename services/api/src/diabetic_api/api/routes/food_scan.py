@@ -42,6 +42,11 @@ from diabetic_api.services.nutrition_lookup import (
 )
 from diabetic_api.services.confidence_engine import get_confidence_engine
 from diabetic_api.services.segmentation import get_segmentation_client
+from diabetic_api.services.volume import (
+    VolumeComputationService,
+    VolumeError,
+    get_volume_service,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -538,6 +543,77 @@ async def scan_food(
         logger.debug("Segmentation disabled via feature flag")
     
     # -------------------------------------------------------------------------
+    # Step 6b: Volume Computation (MVP-2.5) - Requires segmentation + depth
+    # -------------------------------------------------------------------------
+    volume_result = None
+    volume_time_ms: int | None = None
+    volume_ml_computed: float | None = None
+    volume_quality: float | None = None
+    plane_fit_inliers: int | None = None
+    plane_fit_rmse: float | None = None
+    
+    if segmentation_result and segmentation_result.masks and depth_u16 is not None:
+        try:
+            # Read depth data for volume computation
+            depth_data_for_volume = await depth_u16.read()
+            await depth_u16.seek(0)  # Reset for further processing
+            
+            volume_service = get_volume_service()
+            
+            logger.info(
+                "Computing volume",
+                extra={
+                    "scan_id": scan_id,
+                    "masks_count": len(segmentation_result.masks),
+                },
+            )
+            
+            volume_result = volume_service.compute_volume(
+                depth_data=depth_data_for_volume,
+                segmentation_result=segmentation_result,
+                intrinsics_dict=intrinsics_dict,
+            )
+            
+            volume_ml_computed = volume_result.total_volume_ml
+            volume_quality = volume_result.overall_quality_score
+            volume_time_ms = volume_result.total_processing_time_ms
+            plane_fit_inliers = volume_result.plane_fit_inliers
+            plane_fit_rmse = volume_result.plane_fit_rmse
+            
+            logger.info(
+                "Volume computation complete",
+                extra={
+                    "scan_id": scan_id,
+                    "volume_ml": volume_ml_computed,
+                    "quality_score": volume_quality,
+                    "plane_inliers": plane_fit_inliers,
+                    "plane_rmse": plane_fit_rmse,
+                    "processing_time_ms": volume_time_ms,
+                },
+            )
+            
+        except VolumeError as e:
+            logger.warning(
+                f"Volume computation failed: {e.message}",
+                extra={
+                    "scan_id": scan_id,
+                    "error_code": e.code.value,
+                    "details": e.details,
+                },
+            )
+            # Continue without volume - it's not critical
+        except Exception as e:
+            logger.warning(
+                f"Unexpected error in volume computation: {e}",
+                extra={"scan_id": scan_id},
+            )
+    else:
+        if not segmentation_result or not segmentation_result.masks:
+            logger.debug("Volume computation skipped: no segmentation masks")
+        elif depth_u16 is None:
+            logger.debug("Volume computation skipped: no depth data")
+    
+    # -------------------------------------------------------------------------
     # Step 7: Food Recognition via LLaVA/Ollama (MVP-2.4)
     # -------------------------------------------------------------------------
     # Check if food recognition is enabled (default: True)
@@ -783,8 +859,8 @@ async def scan_food(
                 # Legacy support
                 food_candidates=food_candidates,
                 selected_food=selected_food,
-                # Totals
-                volume_ml=total_grams * 0.9,  # Rough estimate
+                # Totals (MVP-2.5: Use computed volume if available, else estimate)
+                volume_ml=volume_ml_computed if volume_ml_computed is not None else total_grams * 0.9,
                 grams_est=total_grams,
                 macros=macros,
                 macro_ranges=macro_ranges,
@@ -812,6 +888,13 @@ async def scan_food(
                     "segmentation_time_ms": segmentation_time_ms,
                     "segmentation_masks_count": len(segmentation_result.masks) if segmentation_result else None,
                     "segmentation_provider": segmentation_result.model_version if segmentation_result else None,
+                    # Volume computation info (MVP-2.5)
+                    "volume_computed": volume_ml_computed is not None,
+                    "volume_ml": volume_ml_computed,
+                    "volume_quality_score": volume_quality,
+                    "volume_time_ms": volume_time_ms,
+                    "plane_fit_inliers": plane_fit_inliers,
+                    "plane_fit_rmse": plane_fit_rmse,
                 } if scan_request.opt_in_store_artifacts else None,
                 processed_at=datetime.now(UTC),
             )
@@ -872,7 +955,7 @@ async def scan_food(
         # Legacy support
         food_candidates=[mock_candidate],
         selected_food=mock_candidate,
-        volume_ml=200.0,
+        volume_ml=volume_ml_computed if volume_ml_computed is not None else 200.0,
         grams_est=150.0,
         macros=mock_macros,
         macro_ranges=mock_ranges,
@@ -891,6 +974,13 @@ async def scan_food(
             "segmentation_enabled": settings.segmentation_enabled,
             "segmentation_time_ms": segmentation_time_ms,
             "segmentation_masks_count": len(segmentation_result.masks) if segmentation_result else None,
+            # Volume computation info (MVP-2.5)
+            "volume_computed": volume_ml_computed is not None,
+            "volume_ml": volume_ml_computed,
+            "volume_quality_score": volume_quality,
+            "volume_time_ms": volume_time_ms,
+            "plane_fit_inliers": plane_fit_inliers,
+            "plane_fit_rmse": plane_fit_rmse,
         } if scan_request.opt_in_store_artifacts else None,
         processed_at=datetime.now(UTC),
     )
