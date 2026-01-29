@@ -72,6 +72,37 @@ RULES:
 Do not include any text outside the JSON."""
 
 
+# Simplified prompt for single food item recognition (MVP-2.9)
+SINGLE_FOOD_RECOGNITION_PROMPT = """You are a food identification expert. This image shows a SINGLE food item that has been cropped from a larger image.
+
+Identify this ONE food item. Be specific about what you see.
+
+Provide:
+1. Food name - be specific, include brand if visible
+2. Estimated portion size in grams
+3. Confidence level (0.0 to 1.0)
+4. Food category (protein, carbohydrate, vegetable, fruit, dairy, fat, beverage, mixed, snack)
+5. Whether this is a mixed dish (true/false)
+6. Realistic macronutrients for the estimated portion
+
+Respond ONLY with valid JSON:
+{
+  "label": "<food name>",
+  "confidence": <0.0-1.0>,
+  "estimated_grams": <number>,
+  "category": "<category>",
+  "is_mixed_dish": <true/false>,
+  "macros": {"carbs": <number>, "protein": <number>, "fat": <number>, "fiber": <number>}
+}
+
+RULES:
+- Identify the SINGLE food item shown
+- Use realistic macros for the portion size
+- If you cannot identify the food, set label to "Unknown food" with low confidence
+
+Do not include any text outside the JSON."""
+
+
 class OllamaFoodRecognition(FoodRecognitionService):
     """
     Food recognition using Ollama with LLaVA vision model.
@@ -302,6 +333,121 @@ class OllamaFoodRecognition(FoodRecognitionService):
         
         return None
     
+    async def recognize_single(
+        self,
+        image_data: bytes,
+        mask_index: int = 0,
+    ) -> RecognizedFood | None:
+        """
+        Recognize a single food item in a cropped image (MVP-2.9).
+        
+        This uses a simplified prompt optimized for single-item recognition,
+        which is more accurate when the image contains only one food item.
+        
+        Args:
+            image_data: Raw cropped image bytes (JPEG or PNG)
+            mask_index: Index of the mask this crop came from (for logging)
+            
+        Returns:
+            RecognizedFood if successful, None if recognition fails
+        """
+        start_time = time.time()
+        
+        try:
+            # Encode image to base64
+            image_b64 = base64.b64encode(image_data).decode("utf-8")
+            
+            # Build request with single-item prompt
+            request_body = {
+                "model": self.model,
+                "prompt": SINGLE_FOOD_RECOGNITION_PROMPT,
+                "images": [image_b64],
+                "stream": False,
+                "options": {
+                    "temperature": 0.2,  # Lower temp for more consistent results
+                    "num_predict": 500,  # Fewer tokens needed for single item
+                    "top_p": 0.9,
+                },
+            }
+            
+            logger.debug(f"Recognizing single food item (mask {mask_index})")
+            
+            # Call Ollama API
+            response = await self._client.post(
+                f"{self.base_url}/api/generate",
+                json=request_body,
+            )
+            
+            if response.status_code != 200:
+                logger.warning(
+                    f"Ollama API error for mask {mask_index}: {response.status_code}"
+                )
+                return None
+            
+            result_data = response.json()
+            raw_response = result_data.get("response", "")
+            
+            # Parse the single food response
+            food = self._parse_single_response(raw_response)
+            
+            if food:
+                processing_time = int((time.time() - start_time) * 1000)
+                logger.info(
+                    f"Mask {mask_index}: identified '{food.label}' "
+                    f"(conf={food.confidence:.2f}) in {processing_time}ms"
+                )
+            
+            return food
+            
+        except Exception as e:
+            logger.warning(f"Single food recognition failed for mask {mask_index}: {e}")
+            return None
+    
+    def _parse_single_response(self, raw_response: str) -> RecognizedFood | None:
+        """Parse LLaVA response for single food item."""
+        
+        json_str = self._extract_json(raw_response)
+        if not json_str:
+            logger.warning("Could not extract JSON from single-item response")
+            return None
+        
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse single-item JSON: {e}")
+            return None
+        
+        try:
+            # Parse macros if present
+            macros = None
+            if "macros" in data:
+                macros = EstimatedMacros(
+                    carbs=float(data["macros"].get("carbs", 0)),
+                    protein=float(data["macros"].get("protein", 0)),
+                    fat=float(data["macros"].get("fat", 0)),
+                    fiber=float(data["macros"].get("fiber", 0)),
+                )
+            
+            # Parse category
+            category_str = data.get("category", "unknown").lower()
+            try:
+                category = FoodCategory(category_str)
+            except ValueError:
+                category = FoodCategory.UNKNOWN
+            
+            return RecognizedFood(
+                label=data.get("label", "Unknown Food"),
+                confidence=float(data.get("confidence", 0.5)),
+                estimated_grams=float(data["estimated_grams"]) if data.get("estimated_grams") else None,
+                estimated_macros=macros,
+                category=category,
+                is_mixed_dish=bool(data.get("is_mixed_dish", False)),
+            )
+            
+        except (KeyError, ValueError, TypeError) as e:
+            logger.warning(f"Failed to parse single food item: {e}")
+            return None
+
     async def health_check(self) -> bool:
         """Check if Ollama is available and has the required model."""
         try:
