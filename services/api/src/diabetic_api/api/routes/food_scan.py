@@ -35,6 +35,8 @@ from diabetic_api.core.config import get_settings
 from diabetic_api.services.food_recognition import (
     FoodRecognitionError,
     get_food_recognition_service,
+    create_per_mask_service,
+    RecognizedFoodWithMask,
 )
 from diabetic_api.services.nutrition_lookup import (
     get_nutrition_lookup_service,
@@ -614,10 +616,12 @@ async def scan_food(
             logger.debug("Volume computation skipped: no depth data")
     
     # -------------------------------------------------------------------------
-    # Step 7: Food Recognition via LLaVA/Ollama (MVP-2.4)
+    # Step 7: Food Recognition via LLaVA/Ollama (MVP-2.4 + MVP-2.9)
     # -------------------------------------------------------------------------
     # Check if food recognition is enabled (default: True)
     use_food_recognition = os.getenv("FOOD_RECOGNITION_ENABLED", "true").lower() == "true"
+    # Check if per-mask recognition is enabled (MVP-2.9, default: True)
+    use_per_mask_recognition = os.getenv("PER_MASK_RECOGNITION_ENABLED", "true").lower() == "true"
     
     if use_food_recognition:
         try:
@@ -633,13 +637,59 @@ async def scan_food(
                     provider=food_service.provider_name,
                 )
             
-            # Recognize foods in the image
-            recognition_result = await food_service.recognize(
-                image_data=rgb_data,
-                max_foods=5,
-                include_macros=True,
-                include_portions=True,
-            )
+            # MVP-2.9: Use per-mask recognition if segmentation available
+            recognition_result = None
+            used_per_mask = False
+            
+            if (
+                use_per_mask_recognition
+                and segmentation_result
+                and segmentation_result.masks
+                and len(segmentation_result.masks) > 0
+            ):
+                try:
+                    logger.info(
+                        f"Using per-mask recognition with {len(segmentation_result.masks)} masks",
+                        extra={"scan_id": scan_id},
+                    )
+                    
+                    per_mask_service = create_per_mask_service(food_service)
+                    recognition_result = await per_mask_service.recognize_with_masks(
+                        rgb_data=rgb_data,
+                        segmentation_result=segmentation_result,
+                        max_masks=5,
+                        parallel=True,
+                    )
+                    
+                    # Check if per-mask recognition was successful
+                    if recognition_result.foods:
+                        used_per_mask = True
+                        logger.info(
+                            f"Per-mask recognition successful: {len(recognition_result.foods)} foods",
+                            extra={"scan_id": scan_id},
+                        )
+                    else:
+                        logger.warning(
+                            "Per-mask recognition returned no foods, falling back to whole-image",
+                            extra={"scan_id": scan_id},
+                        )
+                        recognition_result = None
+                        
+                except Exception as e:
+                    logger.warning(
+                        f"Per-mask recognition failed, falling back to whole-image: {e}",
+                        extra={"scan_id": scan_id},
+                    )
+                    recognition_result = None
+            
+            # Fallback to whole-image recognition if per-mask not used or failed
+            if recognition_result is None:
+                recognition_result = await food_service.recognize(
+                    image_data=rgb_data,
+                    max_foods=5,
+                    include_macros=True,
+                    include_portions=True,
+                )
             
             logger.info(
                 f"Food recognition complete",
@@ -650,6 +700,7 @@ async def scan_food(
                     "is_multi_food_plate": recognition_result.is_multi_food_plate,
                     "confidence": recognition_result.overall_confidence,
                     "processing_time_ms": recognition_result.processing_time_ms,
+                    "used_per_mask": used_per_mask,  # MVP-2.9
                 },
             )
             
@@ -888,6 +939,8 @@ async def scan_food(
                     "segmentation_time_ms": segmentation_time_ms,
                     "segmentation_masks_count": len(segmentation_result.masks) if segmentation_result else None,
                     "segmentation_provider": segmentation_result.model_version if segmentation_result else None,
+                    # Per-mask recognition info (MVP-2.9)
+                    "per_mask_recognition_used": used_per_mask,
                     # Volume computation info (MVP-2.5)
                     "volume_computed": volume_ml_computed is not None,
                     "volume_ml": volume_ml_computed,

@@ -70,6 +70,20 @@ class RecognizedFood(BaseModel):
     )
 
 
+class RecognizedFoodWithMask(RecognizedFood):
+    """A recognized food item linked to its segmentation mask."""
+    
+    mask_index: int = Field(
+        ..., ge=0, description="Index of the segmentation mask this food corresponds to"
+    )
+    bbox: tuple[int, int, int, int] = Field(
+        ..., description="Bounding box (x, y, width, height) from segmentation"
+    )
+    mask_area_pixels: int = Field(
+        0, ge=0, description="Area of the mask in pixels"
+    )
+
+
 class FoodRecognitionResult(BaseModel):
     """Complete result from food recognition."""
     
